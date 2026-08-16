@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"maozi-scan/internal/connections"
 	"maozi-scan/internal/history"
+	"maozi-scan/internal/notes"
 	"maozi-scan/internal/scanner"
 	"maozi-scan/internal/sshproxy"
 )
@@ -27,13 +29,18 @@ type Server struct {
 	lastError string
 	lastScan  time.Time
 
-	history *history.Store
+	history     *history.Store
+	notes       *notes.Store
+	connections *connections.Store
 }
 
 // NewServer 创建 API 服务器。
 // webDir 为前端打包产物目录；从 server/ 目录运行时默认是 ../web/dist。
 // historyFile 为历史持久化文件路径（空则只存内存）。
-func NewServer(addr, webDir, historyFile string) *Server {
+// notesFile 为设备备注持久化文件路径（空则只存内存）。
+// connKey 为 SSH 凭据加密口令（空则不加密）。
+// connFile 为 SSH 凭据持久化文件路径（空则只存内存）。
+func NewServer(addr, webDir, historyFile, notesFile, connKey, connFile string) *Server {
 	return &Server{
 		addr:   addr,
 		webDir: webDir,
@@ -42,8 +49,10 @@ func NewServer(addr, webDir, historyFile string) *Server {
 				return true
 			},
 		},
-		devices:  make([]*scanner.Device, 0),
-		history:  history.NewStore(historyFile, 50),
+		devices:     make([]*scanner.Device, 0),
+		history:     history.NewStore(historyFile, 50),
+		notes:       notes.NewStore(notesFile),
+		connections: connections.NewStore(connKey, connFile),
 	}
 }
 
@@ -66,6 +75,14 @@ func (s *Server) Start() error {
 	// 结果导出
 	mux.HandleFunc("/api/export/csv", s.handleExportCSV)
 	mux.HandleFunc("/api/export/json", s.handleExportJSON)
+
+	// 设备备注
+	mux.HandleFunc("/api/notes", s.handleNotes)
+	mux.HandleFunc("/api/notes/", s.handleNoteByIP)
+
+	// SSH 连接管理
+	mux.HandleFunc("/api/connections", s.handleConnections)
+	mux.HandleFunc("/api/connections/", s.handleConnectionByID)
 
 	// 健康检查
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
@@ -214,10 +231,41 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 	devices := s.devices
 	s.mu.RUnlock()
 
+	// 合并设备备注（自定义名称 / 备注 / 标签颜色）
+	merged := s.applyNotes(devices)
+
 	respondJSON(w, http.StatusOK, APIResponse{
 		Success: true,
-		Data:    devices,
+		Data:    merged,
 	})
+}
+
+// applyNotes 把备注信息合并到设备列表
+func (s *Server) applyNotes(devices []*scanner.Device) []map[string]interface{} {
+	noteMap := s.notes.GetAll()
+	result := make([]map[string]interface{}, 0, len(devices))
+
+	for _, d := range devices {
+		item := map[string]interface{}{
+			"ip":        d.IP,
+			"mac":       d.MAC,
+			"hostname":  d.Hostname,
+			"vendor":    d.Vendor,
+			"status":    d.Status,
+			"source":    d.Source,
+			"openPorts": d.OpenPorts,
+			"noteName":  "",
+			"note":      "",
+			"noteColor": "",
+		}
+		if n, ok := noteMap[d.IP]; ok {
+			item["noteName"] = n.Name
+			item["note"] = n.Note
+			item["noteColor"] = n.Color
+		}
+		result = append(result, item)
+	}
+	return result
 }
 
 // handlePing Ping 单个 IP（系统 ping 命令，无需 root）
@@ -436,6 +484,162 @@ func parseIntOrDefault(s string, defaultVal int) int {
 		return val
 	}
 	return defaultVal
+}
+
+// handleNotes 处理备注列表的 GET（列表）和 POST（创建/更新）
+func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		all := s.notes.GetAll()
+		if all == nil {
+			all = make(map[string]notes.Note)
+		}
+		respondJSON(w, http.StatusOK, APIResponse{Success: true, Data: all})
+
+	case http.MethodPost:
+		var note notes.Note
+		if err := json.NewDecoder(r.Body).Decode(&note); err != nil {
+			respondJSON(w, http.StatusBadRequest, APIResponse{Success: false, Message: err.Error()})
+			return
+		}
+		if note.IP == "" {
+			respondJSON(w, http.StatusBadRequest, APIResponse{Success: false, Message: "ip required"})
+			return
+		}
+		s.notes.Save(note)
+		respondJSON(w, http.StatusOK, APIResponse{Success: true, Data: note})
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleNoteByIP 处理单个 IP 备注的 GET / DELETE
+func (s *Server) handleNoteByIP(w http.ResponseWriter, r *http.Request) {
+	// 路径格式: /api/notes/{ip}
+	ip := r.URL.Path[len("/api/notes/"):]
+	if ip == "" {
+		respondJSON(w, http.StatusBadRequest, APIResponse{Success: false, Message: "ip required"})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		note, ok := s.notes.Get(ip)
+		if !ok {
+			respondJSON(w, http.StatusNotFound, APIResponse{Success: false, Message: "not found"})
+			return
+		}
+		respondJSON(w, http.StatusOK, APIResponse{Success: true, Data: note})
+
+	case http.MethodDelete:
+		s.notes.Delete(ip)
+		respondJSON(w, http.StatusOK, APIResponse{Success: true, Message: "deleted"})
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleConnections 处理连接列表的 GET（列表）和 POST（创建/更新）
+func (s *Server) handleConnections(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		conns := s.connections.GetAll()
+		// 返回时不含密码（即使加密也不暴露 PassEnc）
+		safeConns := make([]map[string]interface{}, 0, len(conns))
+		for _, c := range conns {
+			safeConns = append(safeConns, map[string]interface{}{
+				"id":       c.ID,
+				"host":     c.Host,
+				"port":     c.Port,
+				"username": c.Username,
+				"note":     c.Note,
+				"hasPass":  c.PassEnc != "",
+				"lastUsed": c.LastUsed,
+			})
+		}
+		respondJSON(w, http.StatusOK, APIResponse{Success: true, Data: safeConns})
+
+	case http.MethodPost:
+		var req struct {
+			ID         string `json:"id"`
+			Host       string `json:"host"`
+			Port       int    `json:"port"`
+			Username   string `json:"username"`
+			Password   string `json:"password"`
+			PrivateKey string `json:"privateKey"`
+			Note       string `json:"note"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			respondJSON(w, http.StatusBadRequest, APIResponse{Success: false, Message: err.Error()})
+			return
+		}
+		if req.Host == "" || req.Username == "" {
+			respondJSON(w, http.StatusBadRequest, APIResponse{Success: false, Message: "host and username required"})
+			return
+		}
+		if req.Port <= 0 {
+			req.Port = 22
+		}
+
+		conn := &connections.Connection{
+			ID:         req.ID,
+			Host:       req.Host,
+			Port:       req.Port,
+			Username:   req.Username,
+			PrivateKey: req.PrivateKey,
+			Note:       req.Note,
+		}
+		if err := s.connections.Save(conn, req.Password); err != nil {
+			respondJSON(w, http.StatusInternalServerError, APIResponse{Success: false, Message: err.Error()})
+			return
+		}
+		respondJSON(w, http.StatusOK, APIResponse{Success: true, Data: conn.ID})
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleConnectionByID 处理单个连接的 GET（含密码）/ DELETE
+func (s *Server) handleConnectionByID(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Path[len("/api/connections/"):]
+	if id == "" {
+		respondJSON(w, http.StatusBadRequest, APIResponse{Success: false, Message: "id required"})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		dc, ok := s.connections.GetDecrypted(id)
+		if !ok {
+			respondJSON(w, http.StatusNotFound, APIResponse{Success: false, Message: "not found"})
+			return
+		}
+		respondJSON(w, http.StatusOK, APIResponse{
+			Success: true,
+			Data: map[string]interface{}{
+				"id":         dc.ID,
+				"host":       dc.Host,
+				"port":       dc.Port,
+				"username":   dc.Username,
+				"password":   dc.Password,
+				"privateKey": dc.PrivateKey,
+				"note":       dc.Note,
+			},
+		})
+
+	case http.MethodDelete:
+		if err := s.connections.Delete(id); err != nil {
+			respondJSON(w, http.StatusNotFound, APIResponse{Success: false, Message: err.Error()})
+			return
+		}
+		respondJSON(w, http.StatusOK, APIResponse{Success: true, Message: "deleted"})
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 // buildHistoryEntry 从扫描结果构造历史快照

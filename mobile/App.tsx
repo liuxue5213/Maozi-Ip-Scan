@@ -6,6 +6,7 @@ import { Provider as PaperProvider, MD3LightTheme } from 'react-native-paper'
 
 import ScanScreen from './src/screens/ScanScreen'
 import DeviceDetailScreen from './src/screens/DeviceDetailScreen'
+import { ThemeProvider, useTheme } from './src/context/ThemeContext'
 
 export type RootStackParamList = {
   Scan: undefined
@@ -14,33 +15,32 @@ export type RootStackParamList = {
 
 const Stack = createNativeStackNavigator<RootStackParamList>()
 
-// 基于官方 MD3 主题定制，保证类型完整
-const theme = {
-  ...MD3LightTheme,
-  colors: {
-    ...MD3LightTheme.colors,
-    primary: '#667eea',
-    primaryContainer: '#764ba2',
-    background: '#f5f7fa',
-    surface: '#ffffff',
-  },
-}
-
-const navigationTheme = {
-  ...DefaultTheme,
-  colors: {
-    ...DefaultTheme.colors,
-    primary: '#ffffff',
-    background: '#667eea',
-    card: '#667eea',
-    text: '#ffffff',
-  },
-}
-
 function App(): React.JSX.Element {
   return (
-    <PaperProvider theme={theme}>
-      <NavigationContainer theme={navigationTheme}>
+    <ThemeProvider>
+      <AppInner />
+    </ThemeProvider>
+  )
+}
+
+function AppInner(): React.JSX.Element {
+  const { theme: paperTheme } = useTheme()
+
+  const navTheme = {
+    ...DefaultTheme,
+    dark: paperTheme.dark,
+    colors: {
+      ...DefaultTheme.colors,
+      primary: paperTheme.colors.primary,
+      background: paperTheme.colors.background,
+      card: paperTheme.colors.elevation.level2,
+      text: paperTheme.colors.onSurface,
+    },
+  }
+
+  return (
+    <PaperProvider theme={paperTheme}>
+      <NavigationContainer theme={navTheme}>
         <StatusBar barStyle="light-content" backgroundColor="#667eea" />
         <Stack.Navigator
           initialRouteName="Scan"

@@ -14,14 +14,22 @@ func main() {
 	var addr string
 	var webDir string
 	var historyFile string
+	var notesFile string
+	var connKey string
+	var connFile string
 	flag.StringVar(&addr, "addr", ":8080", "Server listen address")
 	// 默认值按「从 server/ 目录运行」取 ../web/dist；也可指向绝对路径
 	flag.StringVar(&webDir, "web", "../web/dist", "Frontend static files directory")
 	// 历史持久化文件（空则只存内存，重启丢失）
 	flag.StringVar(&historyFile, "history", "data/history.json", "Scan history file path")
+	// 设备备注持久化文件
+	flag.StringVar(&notesFile, "notes", "data/notes.json", "Device notes file path")
+	// SSH 凭据加密口令与持久化文件
+	flag.StringVar(&connKey, "conn-key", "", "SSH connections encryption key (empty=no encryption)")
+	flag.StringVar(&connFile, "conn-file", "data/connections.json", "SSH connections file path")
 	flag.Parse()
 
-	server := api.NewServer(addr, webDir, historyFile)
+	server := api.NewServer(addr, webDir, historyFile, notesFile, connKey, connFile)
 
 	// 优雅关闭
 	sigChan := make(chan os.Signal, 1)

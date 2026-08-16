@@ -6,6 +6,12 @@
         <h1>Maozi-Ip-Scan</h1>
       </div>
       <p class="subtitle">局域网设备扫描工具</p>
+      <button class="theme-toggle" @click="toggle" :title="isDark ? '切换亮色' : '切换暗色'">
+        <el-icon :size="18">
+          <Moon v-if="!isDark" />
+          <Sunny v-else />
+        </el-icon>
+      </button>
     </header>
 
     <nav class="app-nav">
@@ -34,7 +40,10 @@
 </template>
 
 <script setup lang="ts">
-import { Search, Monitor, Clock, Connection } from '@element-plus/icons-vue'
+import { Search, Monitor, Clock, Connection, Sunny, Moon } from '@element-plus/icons-vue'
+import { useDarkMode } from '@/composables/useDarkMode'
+
+const { isDark, toggle } = useDarkMode()
 </script>
 
 <style scoped>
@@ -73,6 +82,27 @@ import { Search, Monitor, Clock, Connection } from '@element-plus/icons-vue'
   margin: 5px 0 0;
   opacity: 0.85;
   font-size: 0.95rem;
+}
+
+.theme-toggle {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  background: rgba(255, 255, 255, 0.2);
+  border: none;
+  border-radius: 50%;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.theme-toggle:hover {
+  background: rgba(255, 255, 255, 0.35);
 }
 
 .app-main {
