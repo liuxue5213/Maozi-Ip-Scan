@@ -8,6 +8,21 @@
       <p class="subtitle">局域网设备扫描工具</p>
     </header>
 
+    <nav class="app-nav">
+      <router-link to="/" class="nav-link">
+        <el-icon><Search /></el-icon><span>扫描</span>
+      </router-link>
+      <router-link to="/devices" class="nav-link">
+        <el-icon><Monitor /></el-icon><span>设备</span>
+      </router-link>
+      <router-link to="/history" class="nav-link">
+        <el-icon><Clock /></el-icon><span>历史</span>
+      </router-link>
+      <router-link to="/ssh" class="nav-link">
+        <el-icon><Connection /></el-icon><span>SSH</span>
+      </router-link>
+    </nav>
+
     <main class="app-main">
       <router-view />
     </main>
@@ -19,6 +34,7 @@
 </template>
 
 <script setup lang="ts">
+import { Search, Monitor, Clock, Connection } from '@element-plus/icons-vue'
 </script>
 
 <style scoped>
@@ -66,6 +82,36 @@
   margin: 0 auto;
   width: 100%;
   box-sizing: border-box;
+}
+
+.app-nav {
+  display: flex;
+  justify-content: center;
+  gap: 4px;
+  background: white;
+  border-bottom: 1px solid #ebeef5;
+  padding: 0 16px;
+}
+
+.nav-link {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 18px;
+  color: #606266;
+  text-decoration: none;
+  font-size: 0.95rem;
+  border-bottom: 2px solid transparent;
+  transition: all 0.2s;
+}
+
+.nav-link:hover {
+  color: #409eff;
+}
+
+.nav-link.router-link-active {
+  color: #667eea;
+  border-bottom-color: #667eea;
 }
 
 .app-footer {

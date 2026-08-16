@@ -11,6 +11,7 @@ export const useScanStore = defineStore('scan', () => {
   const scanProgress = ref(0)
   const cidr = ref('')
   const selectedModes = ref<string[]>(['arp', 'icmp', 'mdns'])
+  const portScan = ref(false)
   const error = ref('')
 
   // 计算属性
@@ -72,7 +73,8 @@ export const useScanStore = defineStore('scan', () => {
         interface: selectedInterface.value.name,
         cidr: cidr.value,
         modes: selectedModes.value,
-        timeout: 5
+        timeout: 5,
+        portScan: portScan.value
       }
 
       const startRes = await api.startScan(config)
@@ -143,6 +145,7 @@ export const useScanStore = defineStore('scan', () => {
     scanProgress,
     cidr,
     selectedModes,
+    portScan,
     error,
     deviceCount,
     onlineDevices,

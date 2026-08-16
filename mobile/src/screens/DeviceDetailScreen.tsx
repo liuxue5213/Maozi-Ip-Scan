@@ -97,6 +97,23 @@ export default function DeviceDetailScreen() {
         </Card.Content>
       </Card>
 
+      {/* 开放端口 */}
+      {device.openPorts && device.openPorts.length > 0 && (
+        <Card style={styles.card}>
+          <Card.Content>
+            <Text style={styles.sectionTitle}>开放端口 ({device.openPorts.length})</Text>
+            <Divider style={styles.divider} />
+            <View style={styles.portsGrid}>
+              {device.openPorts.map((port: number) => (
+                <Chip key={port} mode="outlined" style={styles.portChip}>
+                  {port}
+                </Chip>
+              ))}
+            </View>
+          </Card.Content>
+        </Card>
+      )}
+
       {/* 快捷操作 */}
       <Card style={styles.card}>
         <Card.Content>

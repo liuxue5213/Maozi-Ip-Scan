@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"fmt"
+	"log"
 	"net"
 	"sync"
 	"time"
@@ -116,6 +117,15 @@ func (s *Scanner) Execute() (*ScanResult, error) {
 	devices := make([]*Device, 0, len(deviceMap))
 	for _, d := range deviceMap {
 		devices = append(devices, d)
+	}
+
+	// 端口扫描（可选）
+	if s.config.PortScan && len(devices) > 0 {
+		portTimeout := time.Duration(s.config.Timeout) * time.Second
+		portScanner := NewPortScanner(portTimeout, s.config.CommonPorts)
+		log.Printf("Starting port scan on %d devices...", len(devices))
+		portScanner.ScanDevices(devices)
+		log.Printf("Port scan completed")
 	}
 	
 	// 计算总 IP 数

@@ -14,6 +14,11 @@ const router = createRouter({
       component: () => import('@/views/DevicesView.vue')
     },
     {
+      path: '/history',
+      name: 'history',
+      component: () => import('@/views/HistoryView.vue')
+    },
+    {
       path: '/ssh',
       name: 'ssh',
       component: () => import('@/views/SSHView.vue')

@@ -15,7 +15,8 @@ import {
   ProgressBar,
   FAB,
   IconButton,
-  Badge
+  Badge,
+  Switch
 } from 'react-native-paper'
 import Clipboard from '@react-native-clipboard/clipboard'
 import { useNavigation } from '@react-navigation/native'
@@ -35,6 +36,7 @@ export default function ScanScreen() {
   const [progress, setProgress] = useState(0)
   const [cidr, setCidr] = useState('192.168.1.0/24')
   const [modes] = useState(['arp', 'icmp'])
+  const [portScan, setPortScan] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
 
   useEffect(() => {
@@ -67,7 +69,8 @@ export default function ScanScreen() {
         },
         (device) => {
           setDevices(prev => [...prev, device])
-        }
+        },
+        portScan
       )
       setDevices(results)
     } catch (e) {
@@ -147,6 +150,10 @@ export default function ScanScreen() {
           <Chip icon="wan" mode="outlined" style={styles.cidrChip}>
             {cidr}
           </Chip>
+          <View style={styles.switchRow}>
+            <Text style={styles.switchLabel}>端口扫描</Text>
+            <Switch value={portScan} onValueChange={setPortScan} />
+          </View>
         </Card.Content>
       </Card>
 
@@ -226,6 +233,16 @@ const styles = StyleSheet.create({
   cidrChip: {
     alignSelf: 'flex-start',
     marginTop: 8
+  },
+  switchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 12
+  },
+  switchLabel: {
+    fontSize: 14,
+    color: '#606266'
   },
   progressContainer: {
     paddingHorizontal: 16,

@@ -93,6 +93,14 @@ a {
   margin-top: 4px;
 }
 
+.device-ports {
+  margin-top: 4px;
+}
+
+.device-ports .el-tag {
+  font-family: 'Courier New', monospace;
+}
+
 /* 扫描控制 */
 .scan-controls {
   display: flex;

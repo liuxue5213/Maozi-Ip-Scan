@@ -9,6 +9,7 @@ export interface DeviceInfo {
   vendor: string
   status: 'online' | 'offline'
   source: string
+  openPorts?: number[]
 }
 
 // 网络信息

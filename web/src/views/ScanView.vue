@@ -48,6 +48,13 @@
         </div>
 
         <div class="form-item">
+          <el-checkbox v-model="scanStore.portScan">
+            端口扫描
+          </el-checkbox>
+          <div class="form-hint">扫描常见服务端口（SSH/HTTP/HTTPS/SMB 等），会增加扫描时间</div>
+        </div>
+
+        <div class="form-item">
           <el-button
             type="primary"
             size="large"
@@ -112,6 +119,18 @@
           </div>
           <div class="device-hostname" v-if="device.hostname">
             🖥️ {{ device.hostname }}
+          </div>
+          <div class="device-ports" v-if="device.openPorts && device.openPorts.length">
+            <el-tag
+              v-for="port in device.openPorts"
+              :key="port"
+              size="small"
+              type="warning"
+              effect="plain"
+              style="margin: 2px 2px 0 0"
+            >
+              {{ port }}
+            </el-tag>
           </div>
           <span class="device-source">{{ device.source }}</span>
         </div>

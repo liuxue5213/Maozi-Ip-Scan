@@ -6,6 +6,18 @@
         <el-tag type="info" size="small" style="margin-left: 10px">
           共 {{ scanStore.deviceCount }} 台
         </el-tag>
+        <el-dropdown style="float: right; margin-left: 8px" @command="handleExport">
+          <el-button size="small">
+            <el-icon><Download /></el-icon>
+            导出<el-icon><ArrowDown /></el-icon>
+          </el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="csv">导出 CSV</el-dropdown-item>
+              <el-dropdown-item command="json">导出 JSON</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
         <el-button
           size="small"
           style="float: right"
@@ -52,6 +64,22 @@
           </template>
         </el-table-column>
         
+        <el-table-column label="开放端口" min-width="160">
+          <template #default="{ row }">
+            <span v-if="!row.openPorts || row.openPorts.length === 0" style="color: #c0c4cc">-</span>
+            <el-tag
+              v-for="port in row.openPorts"
+              :key="port"
+              size="small"
+              type="warning"
+              effect="plain"
+              style="margin: 0 2px; font-family: monospace"
+            >
+              {{ port }}
+            </el-tag>
+          </template>
+        </el-table-column>
+
         <el-table-column prop="source" label="发现方式" width="120">
           <template #default="{ row }">
             <el-tag size="small" effect="plain">{{ row.source }}</el-tag>
@@ -102,7 +130,7 @@
 import { onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Refresh, DocumentCopy, Connection, Position } from '@element-plus/icons-vue'
+import { Refresh, DocumentCopy, Connection, Position, Download, ArrowDown } from '@element-plus/icons-vue'
 import { useScanStore } from '@/stores/scan'
 
 const router = useRouter()
@@ -119,6 +147,10 @@ function copyText(text: string) {
 
 function goToSSH(ip: string) {
   router.push({ name: 'ssh', query: { host: ip } })
+}
+
+function handleExport(format: string) {
+  window.open(`/api/export/${format}`, '_blank')
 }
 
 async function pingDevice(ip: string) {

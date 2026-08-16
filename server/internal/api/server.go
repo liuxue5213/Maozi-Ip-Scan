@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"maozi-scan/internal/history"
 	"maozi-scan/internal/scanner"
 	"maozi-scan/internal/sshproxy"
 )
@@ -25,11 +26,14 @@ type Server struct {
 	scanning  bool
 	lastError string
 	lastScan  time.Time
+
+	history *history.Store
 }
 
 // NewServer 创建 API 服务器。
 // webDir 为前端打包产物目录；从 server/ 目录运行时默认是 ../web/dist。
-func NewServer(addr, webDir string) *Server {
+// historyFile 为历史持久化文件路径（空则只存内存）。
+func NewServer(addr, webDir, historyFile string) *Server {
 	return &Server{
 		addr:   addr,
 		webDir: webDir,
@@ -38,7 +42,8 @@ func NewServer(addr, webDir string) *Server {
 				return true
 			},
 		},
-		devices: make([]*scanner.Device, 0),
+		devices:  make([]*scanner.Device, 0),
+		history:  history.NewStore(historyFile, 50),
 	}
 }
 
@@ -53,6 +58,14 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/devices", s.handleDevices)
 	mux.HandleFunc("/api/ping", s.handlePing)
 	mux.HandleFunc("/api/ssh", s.handleSSH)
+
+	// 历史记录
+	mux.HandleFunc("/api/history", s.handleHistory)
+	mux.HandleFunc("/api/history/compare", s.handleHistoryCompare)
+
+	// 结果导出
+	mux.HandleFunc("/api/export/csv", s.handleExportCSV)
+	mux.HandleFunc("/api/export/json", s.handleExportJSON)
 
 	// 健康检查
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
@@ -137,7 +150,7 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 	s.scanning = true
 	s.mu.Unlock()
 
-	// 异步执行扫描，完成后写入结果与状态
+	// 异步执行扫描，完成后写入结果、状态并保存历史
 	go func() {
 		scan := scanner.NewScanner(config)
 		result, err := scan.Execute()
@@ -152,6 +165,10 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 			s.lastError = ""
 			s.devices = result.Devices
 			log.Printf("Scan completed: found %d devices in %dms", result.Found, result.ScanTime)
+
+			// 保存到历史
+			entry := buildHistoryEntry(config, result)
+			s.history.Add(entry)
 		}
 		s.mu.Unlock()
 	}()
@@ -296,6 +313,122 @@ func respondJSON(w http.ResponseWriter, status int, resp APIResponse) {
 	json.NewEncoder(w).Encode(resp)
 }
 
+// handleExportCSV 导出当前设备列表为 CSV
+func (s *Server) handleExportCSV(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	s.mu.RLock()
+	devices := s.devices
+	s.mu.RUnlock()
+
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", "attachment; filename=maozi-scan-devices.csv")
+	w.WriteHeader(http.StatusOK)
+
+	// UTF-8 BOM，让 Excel 正确识别中文
+	w.Write([]byte{0xEF, 0xBB, 0xBF})
+	fmt.Fprintln(w, "IP,MAC,Hostname,Vendor,Status,Source,OpenPorts")
+
+	for _, d := range devices {
+		ports := ""
+		if len(d.OpenPorts) > 0 {
+			for i, p := range d.OpenPorts {
+				if i > 0 {
+					ports += ";"
+				}
+				ports += fmt.Sprintf("%d", p)
+			}
+		}
+		fmt.Fprintf(w, "%s,%s,%s,%s,%s,%s,%s\n",
+			d.IP, d.MAC, d.Hostname, d.Vendor, d.Status, d.Source, ports)
+	}
+}
+
+// handleExportJSON 导出当前设备列表为 JSON
+func (s *Server) handleExportJSON(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	s.mu.RLock()
+	devices := s.devices
+	s.mu.RUnlock()
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Content-Disposition", "attachment; filename=maozi-scan-devices.json")
+	w.WriteHeader(http.StatusOK)
+
+	type exportDevice struct {
+		IP        string `json:"ip"`
+		MAC       string `json:"mac"`
+		Hostname  string `json:"hostname"`
+		Vendor    string `json:"vendor"`
+		Status    string `json:"status"`
+		Source    string `json:"source"`
+		OpenPorts []int  `json:"openPorts,omitempty"`
+	}
+
+	export := struct {
+		ExportTime string         `json:"exportTime"`
+		Count      int            `json:"count"`
+		Devices    []exportDevice `json:"devices"`
+	}{
+		ExportTime: time.Now().Format(time.RFC3339),
+		Count:      len(devices),
+		Devices:    make([]exportDevice, 0, len(devices)),
+	}
+
+	for _, d := range devices {
+		export.Devices = append(export.Devices, exportDevice{
+			IP:        d.IP,
+			MAC:       d.MAC,
+			Hostname:  d.Hostname,
+			Vendor:    d.Vendor,
+			Status:    d.Status,
+			Source:    d.Source,
+			OpenPorts: d.OpenPorts,
+		})
+	}
+
+	json.NewEncoder(w).Encode(export)
+}
+
+// handleHistory 获取扫描历史列表
+func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	entries := s.history.GetAll()
+	if entries == nil {
+		entries = make([]history.Entry, 0)
+	}
+
+	respondJSON(w, http.StatusOK, APIResponse{
+		Success: true,
+		Data:    entries,
+	})
+}
+
+// handleHistoryCompare 对比最近两次扫描的设备变化
+func (s *Server) handleHistoryCompare(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	diff := s.history.Compare()
+	respondJSON(w, http.StatusOK, APIResponse{
+		Success: true,
+		Data:    diff,
+	})
+}
+
 // parseIntOrDefault 解析整数，失败返回默认值
 func parseIntOrDefault(s string, defaultVal int) int {
 	var val int
@@ -303,4 +436,28 @@ func parseIntOrDefault(s string, defaultVal int) int {
 		return val
 	}
 	return defaultVal
+}
+
+// buildHistoryEntry 从扫描结果构造历史快照
+func buildHistoryEntry(config scanner.ScanConfig, result *scanner.ScanResult) *history.Entry {
+	snaps := make([]history.DeviceSnapshot, 0, len(result.Devices))
+	for _, d := range result.Devices {
+		snaps = append(snaps, history.DeviceSnapshot{
+			IP:        d.IP,
+			MAC:       d.MAC,
+			Hostname:  d.Hostname,
+			Vendor:    d.Vendor,
+			Source:    d.Source,
+			OpenPorts: d.OpenPorts,
+		})
+	}
+
+	return &history.Entry{
+		Time:        time.Now(),
+		CIDR:        config.CIDR,
+		Modes:       config.Modes,
+		DeviceCount: result.Found,
+		Devices:     snaps,
+		ScanTimeMs:  result.ScanTime,
+	}
 }
