@@ -2,7 +2,6 @@ package com.maoziscan;
 
 import com.facebook.react.ReactActivity;
 import com.facebook.react.ReactActivityDelegate;
-import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint;
 import com.facebook.react.defaults.DefaultReactActivityDelegate;
 
 public class MainActivity extends ReactActivity {
@@ -16,11 +15,10 @@ public class MainActivity extends ReactActivity {
   }
 
   /**
-   * 使用官方 Delegate，便于未来开启 Fabric（新架构）
+   * 使用官方 Delegate（旧架构，fabricEnabled=false）
    */
   @Override
   protected ReactActivityDelegate createReactActivityDelegate() {
-    return new DefaultReactActivityDelegate(
-        this, getMainComponentName(), DefaultNewArchitectureEntryPoint.fabricEnabled);
+    return new DefaultReactActivityDelegate(this, getMainComponentName(), false);
   }
 }
