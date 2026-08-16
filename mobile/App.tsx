@@ -6,7 +6,6 @@ import { Provider as PaperProvider, MD3LightTheme } from 'react-native-paper'
 
 import ScanScreen from './src/screens/ScanScreen'
 import DeviceDetailScreen from './src/screens/DeviceDetailScreen'
-import { ThemeProvider, useTheme } from './src/context/ThemeContext'
 
 export type RootStackParamList = {
   Scan: undefined
@@ -15,29 +14,30 @@ export type RootStackParamList = {
 
 const Stack = createNativeStackNavigator<RootStackParamList>()
 
-function App(): React.JSX.Element {
-  return (
-    <ThemeProvider>
-      <AppInner />
-    </ThemeProvider>
-  )
+// 浅色主题定制
+const paperTheme = {
+  ...MD3LightTheme,
+  colors: {
+    ...MD3LightTheme.colors,
+    primary: '#667eea',
+    primaryContainer: '#764ba2',
+    background: '#f5f7fa',
+    surface: '#ffffff',
+  },
 }
 
-function AppInner(): React.JSX.Element {
-  const { theme: paperTheme } = useTheme()
+const navTheme = {
+  ...DefaultTheme,
+  colors: {
+    ...DefaultTheme.colors,
+    primary: '#ffffff',
+    background: '#667eea',
+    card: '#667eea',
+    text: '#ffffff',
+  },
+}
 
-  const navTheme = {
-    ...DefaultTheme,
-    dark: paperTheme.dark,
-    colors: {
-      ...DefaultTheme.colors,
-      primary: paperTheme.colors.primary,
-      background: paperTheme.colors.background,
-      card: paperTheme.colors.elevation.level2,
-      text: paperTheme.colors.onSurface,
-    },
-  }
-
+function App(): React.JSX.Element {
   return (
     <PaperProvider theme={paperTheme}>
       <NavigationContainer theme={navTheme}>

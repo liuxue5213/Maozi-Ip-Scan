@@ -21,7 +21,6 @@ import {
 import Clipboard from '@react-native-clipboard/clipboard'
 import { useNavigation } from '@react-navigation/native'
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack'
-import { useTheme } from '../context/ThemeContext'
 
 import { getNetworkInfo, generateCIDR, NetworkInfo, DeviceInfo } from '../services/network'
 import { scanNetwork, readArpTable } from '../services/scanner'
@@ -39,7 +38,6 @@ export default function ScanScreen() {
   const [modes] = useState(['arp', 'icmp'])
   const [portScan, setPortScan] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
-  const { isDark, toggle } = useTheme()
 
   useEffect(() => {
     loadNetworkInfo()
@@ -155,10 +153,6 @@ export default function ScanScreen() {
           <View style={styles.switchRow}>
             <Text style={styles.switchLabel}>端口扫描</Text>
             <Switch value={portScan} onValueChange={setPortScan} />
-          </View>
-          <View style={styles.switchRow}>
-            <Text style={styles.switchLabel}>暗色模式</Text>
-            <Switch value={isDark} onValueChange={toggle} />
           </View>
         </Card.Content>
       </Card>
