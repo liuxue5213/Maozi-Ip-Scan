@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"maozi-scan/internal/scanner"
@@ -15,15 +17,22 @@ import (
 // Server HTTP 服务器
 type Server struct {
 	addr     string
+	webDir   string // 前端静态文件目录
 	upgrader websocket.Upgrader
-	devices  []*scanner.Device
-	mu       sync.RWMutex
+
+	mu        sync.RWMutex
+	devices   []*scanner.Device
+	scanning  bool
+	lastError string
+	lastScan  time.Time
 }
 
-// NewServer 创建 API 服务器
-func NewServer(addr string) *Server {
+// NewServer 创建 API 服务器。
+// webDir 为前端打包产物目录；从 server/ 目录运行时默认是 ../web/dist。
+func NewServer(addr, webDir string) *Server {
 	return &Server{
-		addr: addr,
+		addr:   addr,
+		webDir: webDir,
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
 				return true
@@ -40,6 +49,7 @@ func (s *Server) Start() error {
 	// API 路由
 	mux.HandleFunc("/api/interfaces", s.handleInterfaces)
 	mux.HandleFunc("/api/scan", s.handleScan)
+	mux.HandleFunc("/api/scan/status", s.handleScanStatus)
 	mux.HandleFunc("/api/devices", s.handleDevices)
 	mux.HandleFunc("/api/ping", s.handlePing)
 	mux.HandleFunc("/api/ssh", s.handleSSH)
@@ -49,10 +59,10 @@ func (s *Server) Start() error {
 		respondJSON(w, http.StatusOK, APIResponse{Success: true, Message: "ok"})
 	})
 
-	// 静态文件（前端打包后）
-	mux.Handle("/", http.FileServer(http.Dir("./web/dist")))
+	// 静态文件（前端打包后），API 路由已注册在更具体的 pattern 上，不受影响
+	mux.Handle("/", http.FileServer(http.Dir(s.webDir)))
 
-	log.Printf("Server starting on %s", s.addr)
+	log.Printf("Server starting on %s (web dir: %s)", s.addr, s.webDir)
 	return http.ListenAndServe(s.addr, s.corsMiddleware(mux))
 }
 
@@ -115,25 +125,64 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 		config.Modes = []string{"arp", "icmp", "mdns"}
 	}
 
-	// 异步执行扫描
+	s.mu.Lock()
+	if s.scanning {
+		s.mu.Unlock()
+		respondJSON(w, http.StatusConflict, APIResponse{
+			Success: false,
+			Message: "scan already in progress",
+		})
+		return
+	}
+	s.scanning = true
+	s.mu.Unlock()
+
+	// 异步执行扫描，完成后写入结果与状态
 	go func() {
 		scan := scanner.NewScanner(config)
 		result, err := scan.Execute()
-		if err != nil {
-			log.Printf("Scan error: %v", err)
-			return
-		}
 
 		s.mu.Lock()
-		s.devices = result.Devices
+		s.scanning = false
+		s.lastScan = time.Now()
+		if err != nil {
+			s.lastError = err.Error()
+			log.Printf("Scan error: %v", err)
+		} else {
+			s.lastError = ""
+			s.devices = result.Devices
+			log.Printf("Scan completed: found %d devices in %dms", result.Found, result.ScanTime)
+		}
 		s.mu.Unlock()
-
-		log.Printf("Scan completed: found %d devices in %dms", result.Found, result.ScanTime)
 	}()
 
 	respondJSON(w, http.StatusOK, APIResponse{
 		Success: true,
 		Message: "Scan started",
+	})
+}
+
+// handleScanStatus 获取扫描状态：前端据此判断扫描何时结束（即使结果为空）
+func (s *Server) handleScanStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	s.mu.RLock()
+	status := map[string]interface{}{
+		"scanning":    s.scanning,
+		"deviceCount": len(s.devices),
+		"lastError":   s.lastError,
+	}
+	if !s.lastScan.IsZero() {
+		status["lastScan"] = s.lastScan.Unix()
+	}
+	s.mu.RUnlock()
+
+	respondJSON(w, http.StatusOK, APIResponse{
+		Success: true,
+		Data:    status,
 	})
 }
 
@@ -154,7 +203,7 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handlePing Ping 单个 IP
+// handlePing Ping 单个 IP（系统 ping 命令，无需 root）
 func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -162,34 +211,23 @@ func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ip := r.URL.Query().Get("ip")
-	if ip == "" {
+	if net.ParseIP(ip) == nil {
 		respondJSON(w, http.StatusBadRequest, APIResponse{
 			Success: false,
-			Message: "IP parameter required",
+			Message: "valid ip parameter required",
 		})
 		return
 	}
 
-	interfaces, _ := scanner.GetInterfaces()
-	if len(interfaces) == 0 {
-		respondJSON(w, http.StatusInternalServerError, APIResponse{
-			Success: false,
-			Message: "No network interface available",
-		})
-		return
-	}
-
-	scan := scanner.NewScanner(scanner.ScanConfig{
-		Interface: interfaces[0].Name,
-		CIDR:      fmt.Sprintf("%s/32", ip),
-		Modes:     []string{"icmp"},
-		Timeout:   3,
-	})
-	result, err := scan.Execute()
+	online := scanner.Ping(ip, 3*time.Second)
 
 	respondJSON(w, http.StatusOK, APIResponse{
-		Success: err == nil,
-		Data:    result,
+		Success: online,
+		Data: map[string]interface{}{
+			"ip":     ip,
+			"online": online,
+		},
+		Message: map[bool]string{true: "host is reachable", false: "host is unreachable"}[online],
 	})
 }
 

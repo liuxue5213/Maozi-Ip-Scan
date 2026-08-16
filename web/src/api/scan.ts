@@ -1,4 +1,4 @@
-import axios from 'axios'
+import axios, { type AxiosResponse } from 'axios'
 
 const request = axios.create({
   baseURL: '/api',
@@ -36,6 +36,13 @@ export interface ScanConfig {
   commonPorts?: number[]
 }
 
+export interface ScanStatus {
+  scanning: boolean
+  deviceCount: number
+  lastError?: string
+  lastScan?: number
+}
+
 export interface APIResponse<T = any> {
   success: boolean
   message?: string
@@ -45,27 +52,32 @@ export interface APIResponse<T = any> {
 // API 方法
 export const api = {
   // 获取网络接口列表
-  getInterfaces(): Promise<APIResponse<NetworkInterface[]>> {
+  getInterfaces(): Promise<AxiosResponse<APIResponse<NetworkInterface[]>>> {
     return request.get('/interfaces')
   },
 
   // 启动扫描
-  startScan(config: ScanConfig): Promise<APIResponse> {
+  startScan(config: ScanConfig): Promise<AxiosResponse<APIResponse>> {
     return request.post('/scan', config)
   },
 
+  // 获取扫描状态（scanning 为 false 表示本轮扫描已结束，即使结果为空）
+  getScanStatus(): Promise<AxiosResponse<APIResponse<ScanStatus>>> {
+    return request.get('/scan/status')
+  },
+
   // 获取设备列表
-  getDevices(): Promise<APIResponse<Device[]>> {
+  getDevices(): Promise<AxiosResponse<APIResponse<Device[]>>> {
     return request.get('/devices')
   },
 
   // Ping 单个 IP
-  ping(ip: string): Promise<APIResponse> {
+  ping(ip: string): Promise<AxiosResponse<APIResponse>> {
     return request.get('/ping', { params: { ip } })
   },
 
   // 健康检查
-  health(): Promise<APIResponse> {
+  health(): Promise<AxiosResponse<APIResponse>> {
     return request.get('/health')
   }
 }

@@ -12,10 +12,13 @@ import (
 
 func main() {
 	var addr string
+	var webDir string
 	flag.StringVar(&addr, "addr", ":8080", "Server listen address")
+	// 默认值按「从 server/ 目录运行」取 ../web/dist；也可指向绝对路径
+	flag.StringVar(&webDir, "web", "../web/dist", "Frontend static files directory")
 	flag.Parse()
 
-	server := api.NewServer(addr)
+	server := api.NewServer(addr, webDir)
 
 	// 优雅关闭
 	sigChan := make(chan os.Signal, 1)

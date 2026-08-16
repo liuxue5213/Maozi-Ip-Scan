@@ -183,7 +183,7 @@ function initTerminal() {
       background: '#1e1e1e',
       foreground: '#d4d4d4',
       cursor: '#d4d4d4',
-      selection: '#264f78',
+      selectionBackground: '#264f78',
       black: '#000000',
       red: '#cd3131',
       green: '#0dbc79',

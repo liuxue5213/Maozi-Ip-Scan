@@ -1,18 +1,35 @@
+# Android APK 打包流程
+#
+# 按约定：此 workflow 仅手动触发（workflow_dispatch），
+# 不会在 push/PR 时自动运行。
+# 触发方式：GitHub 仓库 → Actions → Android CI → Run workflow，
+# 或命令行：gh workflow run android.yml
+
 name: Android CI
 
 on:
-  push:
-    branches: [main]
-    tags:
-      - 'v*'
-  pull_request:
-    branches: [main]
-  workflow_dispatch:  # 手动触发
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: '构建类型'
+        required: false
+        default: 'both'
+        type: choice
+        options:
+          - debug
+          - release
+          - both
 
 jobs:
   build:
+    name: Build APK (${{ github.event.inputs.build_type || 'both' }})
     runs-on: ubuntu-latest
-    
+    timeout-minutes: 45
+
+    defaults:
+      run:
+        working-directory: ./mobile
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -26,68 +43,66 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install npm dependencies
+        run: npm ci || npm install
+
       - name: Cache Gradle
         uses: actions/cache@v4
         with:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          key: ${{ runner.os }}-gradle-${{ hashFiles('mobile/android/**/*.gradle*', 'mobile/android/gradle/wrapper/gradle-wrapper.properties') }}
           restore-keys: |
             ${{ runner.os }}-gradle-
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: mobile/package-lock.json
-
-      - name: Install npm dependencies
-        working-directory: ./mobile
-        run: npm ci
 
       - name: Grant execute permission for gradlew
         working-directory: ./mobile/android
         run: chmod +x gradlew
 
       - name: Build Debug APK
+        if: github.event.inputs.build_type == 'debug' || github.event.inputs.build_type == 'both' || github.event.inputs.build_type == ''
         working-directory: ./mobile/android
-        run: ./gradlew assembleDebug
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Rename Debug APK
+        if: github.event.inputs.build_type == 'debug' || github.event.inputs.build_type == 'both' || github.event.inputs.build_type == ''
+        working-directory: ./mobile/android
+        run: |
+          mv app/build/outputs/apk/debug/app-debug.apk \
+             app/build/outputs/apk/debug/Maozi-Ip-Scan-debug.apk
 
       - name: Upload Debug APK
+        if: github.event.inputs.build_type == 'debug' || github.event.inputs.build_type == 'both' || github.event.inputs.build_type == ''
         uses: actions/upload-artifact@v4
         with:
-          name: maozi-scan-debug.apk
-          path: mobile/android/app/build/outputs/apk/debug/app-debug.apk
+          name: Maozi-Ip-Scan-debug
+          path: mobile/android/app/build/outputs/apk/debug/Maozi-Ip-Scan-debug.apk
           retention-days: 30
 
-      # 仅在 tag 推送时构建 Release APK
+      # Release 使用 debug 签名（app/build.gradle 中配置），
+      # 产物可直接安装；正式发布签名时再接入 secrets。
       - name: Build Release APK
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.event.inputs.build_type == 'release' || github.event.inputs.build_type == 'both' || github.event.inputs.build_type == ''
         working-directory: ./mobile/android
-        run: ./gradlew assembleRelease
-        env:
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: ./gradlew assembleRelease --stacktrace
+
+      - name: Rename Release APK
+        if: github.event.inputs.build_type == 'release' || github.event.inputs.build_type == 'both' || github.event.inputs.build_type == ''
+        working-directory: ./mobile/android
+        run: |
+          mv app/build/outputs/apk/release/app-release.apk \
+             app/build/outputs/apk/release/Maozi-Ip-Scan-release.apk
 
       - name: Upload Release APK
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.event.inputs.build_type == 'release' || github.event.inputs.build_type == 'both' || github.event.inputs.build_type == ''
         uses: actions/upload-artifact@v4
         with:
-          name: maozi-scan-release.apk
-          path: mobile/android/app/build/outputs/apk/release/app-release.apk
+          name: Maozi-Ip-Scan-release
+          path: mobile/android/app/build/outputs/apk/release/Maozi-Ip-Scan-release.apk
           retention-days: 90
-
-      # 创建 GitHub Release
-      - name: Create Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v1
-        with:
-          files: |
-            mobile/android/app/build/outputs/apk/release/app-release.apk
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

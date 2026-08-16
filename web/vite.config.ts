@@ -14,7 +14,8 @@ export default defineConfig({
     proxy: {
       '/api': {
         target: 'http://localhost:8080',
-        changeOrigin: true
+        changeOrigin: true,
+        ws: true // 代理 WebSocket 升级请求（SSH 终端）
       }
     }
   },

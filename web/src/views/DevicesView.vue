@@ -123,8 +123,8 @@ function goToSSH(ip: string) {
 
 async function pingDevice(ip: string) {
   try {
-    const res = await scanStore.ping?.(ip)
-    if (res?.data?.success) {
+    const res = await scanStore.ping(ip)
+    if (res?.data?.online) {
       ElMessage.success(`${ip} 可达`)
     } else {
       ElMessage.warning(`${ip} 不可达`)

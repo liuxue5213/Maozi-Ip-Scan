@@ -34,9 +34,15 @@ server/
 ## 运行
 
 ```bash
-go mod tidy
-go run cmd/server/main.go -addr :8080
+go mod tidy   # 首次运行需要（生成 go.sum）
+go run cmd/server/main.go -addr :8080 -web ../web/dist
 ```
+
+参数说明：
+- `-addr` 监听地址，默认 `:8080`
+- `-web` 前端静态文件目录，默认 `../web/dist`（从 server/ 目录运行时的相对路径）
+
+> 注：扫描基于系统 `ping` 命令与 ARP 表读取，无需 root 权限；macOS 与 Linux 均可运行。
 
 ## Docker
 
@@ -54,6 +60,7 @@ docker run --net=host -p 8080:8080 maozi-scan
 | GET | /api/health | 健康检查 |
 | GET | /api/interfaces | 网络接口列表 |
 | POST | /api/scan | 启动扫描 |
+| GET | /api/scan/status | 扫描状态（scanning/deviceCount/lastError） |
 | GET | /api/devices | 获取设备列表 |
 | GET | /api/ping?ip=x.x.x.x | Ping 测试 |
 | WS | /api/ssh?host=x.x.x.x&username=xxx | SSH 代理 |

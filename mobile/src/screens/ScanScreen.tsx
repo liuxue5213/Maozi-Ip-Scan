@@ -17,11 +17,12 @@ import {
   IconButton,
   Badge
 } from 'react-native-paper'
+import Clipboard from '@react-native-clipboard/clipboard'
 import { useNavigation } from '@react-navigation/native'
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack'
 
-import { getNetworkInfo, generateCIDR, NetworkInfo } from '../services/network'
-import { scanNetwork, readArpTable, DeviceInfo } from '../services/scanner'
+import { getNetworkInfo, generateCIDR, NetworkInfo, DeviceInfo } from '../services/network'
+import { scanNetwork, readArpTable } from '../services/scanner'
 import type { RootStackParamList } from '../../App'
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>
@@ -87,8 +88,6 @@ export default function ScanScreen() {
   }
 
   const copyIP = (ip: string) => {
-    // React Native Clipboard
-    const { Clipboard } = require('react-native')
     Clipboard.setString(ip)
     Alert.alert('已复制', ip)
   }

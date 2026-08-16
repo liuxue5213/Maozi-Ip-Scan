@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -255,6 +254,3 @@ func (s *SSHSession) Close() {
 func (s *SSHSession) IsConnected() bool {
 	return s.connected && s.client != nil
 }
-
-// 确保导入
-var _ = net.Dial

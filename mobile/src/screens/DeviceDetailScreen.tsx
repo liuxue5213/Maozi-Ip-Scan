@@ -142,7 +142,7 @@ export default function DeviceDetailScreen() {
             <Text style={styles.sectionTitle}>开放端口</Text>
             <Divider style={styles.divider} />
             <View style={styles.portsGrid}>
-              {device.openPorts.map(port => (
+              {device.openPorts.map((port: number) => (
                 <Chip key={port} mode="outlined" style={styles.portChip}>
                   {port}
                 </Chip>

@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import api, { NetworkInterface, Device, ScanConfig } from '@/api/scan'
+import api, { NetworkInterface, Device, ScanConfig, APIResponse } from '@/api/scan'
 
 export const useScanStore = defineStore('scan', () => {
   // 状态
@@ -75,31 +75,40 @@ export const useScanStore = defineStore('scan', () => {
         timeout: 5
       }
 
-      await api.startScan(config)
-
-      // 轮询扫描结果
-      const interval = setInterval(async () => {
-        scanProgress.value = Math.min(scanProgress.value + 10, 90)
-        const res = await api.getDevices()
-        if (res.data?.success && res.data.data) {
-          devices.value = res.data.data
-          if (devices.value.length > 0) {
-            scanProgress.value = 100
-            clearInterval(interval)
-            scanning.value = false
-          }
-        }
-      }, 1000)
-
-      // 超时停止
-      setTimeout(() => {
-        clearInterval(interval)
-        scanProgress.value = 100
+      const startRes = await api.startScan(config)
+      if (!startRes.data?.success) {
+        error.value = startRes.data?.message || '启动扫描失败'
         scanning.value = false
-      }, 30000)
+        return
+      }
 
+      // 轮询后端扫描状态：scanning 变为 false 即结束（0 台设备也能正确终止）
+      await new Promise<void>((resolve) => {
+        const interval = setInterval(async () => {
+          scanProgress.value = Math.min(scanProgress.value + 5, 90)
+          try {
+            const res = await api.getScanStatus()
+            if (res.data?.success && res.data.data && !res.data.data.scanning) {
+              clearInterval(interval)
+              resolve()
+            }
+          } catch {
+            // 单次轮询失败不中断，继续等下一个周期
+          }
+        }, 1000)
+
+        // 安全兜底：最长等待 120 秒（mDNS 并行查询后单轮扫描通常 < 10 秒）
+        setTimeout(() => {
+          clearInterval(interval)
+          resolve()
+        }, 120000)
+      })
+
+      await refreshDevices()
     } catch (e: any) {
       error.value = e.message
+    } finally {
+      scanProgress.value = 100
       scanning.value = false
     }
   }
@@ -117,12 +126,12 @@ export const useScanStore = defineStore('scan', () => {
   }
 
   // Ping 单个设备
-  async function ping(ip: string) {
+  async function ping(ip: string): Promise<APIResponse> {
     try {
       const res = await api.ping(ip)
       return res.data
     } catch (e: any) {
-      return { success: false, message: e.message }
+      return { success: false, message: e.message, data: { ip, online: false } }
     }
   }
 

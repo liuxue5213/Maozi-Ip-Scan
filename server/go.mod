@@ -3,11 +3,9 @@ module maozi-scan
 go 1.21
 
 require (
-	github.com/google/gopacket v1.1.19
 	github.com/gorilla/websocket v1.5.1
 	github.com/hashicorp/mdns v1.0.5
 	golang.org/x/crypto v0.21.0
-	golang.org/x/net v0.22.0
 )
 
 require (

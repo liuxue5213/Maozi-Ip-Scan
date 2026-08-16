@@ -1,10 +1,9 @@
 package scanner
 
 import (
-	"context"
-	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hashicorp/mdns"
@@ -20,55 +19,71 @@ func NewmDNSScanner(timeout int) *mDNSScanner {
 	return &mDNSScanner{timeout: timeout}
 }
 
-// Scan 执行 mDNS 服务发现
-func (s *mDNSScanner) Scan() ([]*Device, error) {
-	var devices []*Device
-	devicesChan := make(chan *mdns.ServiceEntry, 100)
-	
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(s.timeout)*time.Second)
-	defer cancel()
+// 常见 mDNS 服务类型
+var mdnsServices = []string{
+	"_http._tcp",
+	"_ssh._tcp",
+	"_smb._tcp",
+	"_raop._tcp",
+	"_airplay._tcp",
+	"_ipp._tcp",
+	"_printer._tcp",
+	"_googlecast._tcp",
+	"_hap._tcp",
+}
 
+// Scan 执行 mDNS 服务发现。
+// 各服务类型并行查询，总耗时约等于单个查询的超时时间；
+// 结果由单一收集 goroutine 归并，避免数据竞争。
+func (s *mDNSScanner) Scan() ([]*Device, error) {
+	entriesCh := make(chan *mdns.ServiceEntry, 256)
+	done := make(chan []*Device, 1)
+
+	// 收集 goroutine：唯一写 devices 的地方，按 IP 去重
 	go func() {
-		for entry := range devicesChan {
+		seen := make(map[string]*Device)
+		var order []*Device
+		for entry := range entriesCh {
 			device := parseServiceEntry(entry)
-			if device != nil {
-				devices = append(devices, device)
+			if device == nil {
+				continue
 			}
+			if existing, ok := seen[device.IP]; ok {
+				// 同一设备的多个服务，补全信息
+				if existing.Hostname == "" {
+					existing.Hostname = device.Hostname
+				}
+				if existing.Vendor == "" {
+					existing.Vendor = device.Vendor
+				}
+				continue
+			}
+			seen[device.IP] = device
+			order = append(order, device)
 		}
+		done <- order
 	}()
 
-	// 发现常见服务
-	params := &mdns.QueryParam{
-		Domain:    "local",
-		Entries:   devicesChan,
-		Timeout:   time.Duration(s.timeout) * time.Second,
-		Interface: nil, // 所有接口
+	// 并行查询各服务类型
+	var wg sync.WaitGroup
+	for _, service := range mdnsServices {
+		wg.Add(1)
+		go func(svc string) {
+			defer wg.Done()
+			params := &mdns.QueryParam{
+				Service: svc,
+				Domain:  "local",
+				Entries: entriesCh,
+				Timeout: time.Duration(s.timeout) * time.Second,
+			}
+			// 查询失败（如无组播路由）不致命，忽略错误
+			_ = mdns.Query(params)
+		}(service)
 	}
-	
-	// 查询常见服务类型
-	services := []string{
-		"_http._tcp",
-		"_ssh._tcp",
-		"_smb._tcp",
-		"_raop._tcp",
-		"_airplay._tcp",
-		"_ipp._tcp",
-		"_printer._tcp",
-		"_googlecast._tcp",
-		"_hap._tcp",
-	}
-	
-	for _, service := range services {
-		params.Service = service
-		mdns.Query(params)
-	}
-	
-	cancel()
-	close(devicesChan)
-	
-	// 等待收集完成
-	time.Sleep(100 * time.Millisecond)
-	
+	wg.Wait()
+	close(entriesCh)
+
+	devices := <-done
 	return devices, nil
 }
 
@@ -77,7 +92,7 @@ func parseServiceEntry(entry *mdns.ServiceEntry) *Device {
 	if entry.AddrV4 == nil {
 		return nil
 	}
-	
+
 	device := &Device{
 		IP:        entry.AddrV4.String(),
 		Status:    "online",
@@ -85,47 +100,46 @@ func parseServiceEntry(entry *mdns.ServiceEntry) *Device {
 		LastSeen:  time.Now(),
 		Source:    "mdns",
 	}
-	
+
 	if entry.Name != "" {
-		device.Hostname = strings.TrimSuffix(entry.Name, ".local")
-		device.Hostname = strings.TrimSuffix(device.Hostname, ".")
+		name := strings.TrimSuffix(entry.Name, ".local")
+		device.Hostname = strings.TrimSuffix(name, ".")
 	}
-	
+
 	if entry.Info != "" {
 		device.Vendor = entry.Info
 	}
-	
+
 	return device
 }
 
 // QuerySpecificService 查询特定 mDNS 服务
 func QuerySpecificService(service string, timeout int) ([]*Device, error) {
-	var devices []*Device
-	entries := make(chan *mdns.ServiceEntry, 10)
-	
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
-	defer cancel()
-	
+	entries := make(chan *mdns.ServiceEntry, 64)
+	done := make(chan []*Device, 1)
+
 	go func() {
+		var devices []*Device
 		for entry := range entries {
-			if entry.AddrV4 != nil {
-				devices = append(devices, parseServiceEntry(entry))
+			if entry.AddrV4 == nil {
+				continue
+			}
+			if device := parseServiceEntry(entry); device != nil {
+				devices = append(devices, device)
 			}
 		}
+		done <- devices
 	}()
-	
+
 	params := &mdns.QueryParam{
 		Service: service,
 		Domain:  "local",
 		Entries: entries,
 		Timeout: time.Duration(timeout) * time.Second,
 	}
-	
 	err := mdns.Query(params)
-	cancel()
 	close(entries)
-	time.Sleep(100 * time.Millisecond)
-	
+	devices := <-done
 	return devices, err
 }
 
@@ -145,6 +159,3 @@ func GetMDNSName(ip string) string {
 	}
 	return ""
 }
-
-// 辅助函数 - 确保导入
-var _ = fmt.Sprintf

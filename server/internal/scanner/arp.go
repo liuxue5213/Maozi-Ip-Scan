@@ -2,9 +2,11 @@ package scanner
 
 import (
 	"bufio"
-	"fmt"
 	"net"
 	"os"
+	"os/exec"
+	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -12,8 +14,8 @@ import (
 
 // ARPScanner ARP 扫描器
 type ARPScanner struct {
-	iface    *NetworkInterface
-	timeout  time.Duration
+	iface   *NetworkInterface
+	timeout time.Duration
 }
 
 // NewARPScanner 创建 ARP 扫描器
@@ -24,37 +26,69 @@ func NewARPScanner(iface *NetworkInterface, timeout time.Duration) *ARPScanner {
 	}
 }
 
-// Scan 执行 ARP 扫描
+// Scan 执行 ARP 扫描：先 ping 网段触发 ARP 解析，再读取系统 ARP 表。
 func (s *ARPScanner) Scan(cidr string) ([]*Device, error) {
-	devices := s.readARPTable()
-	
-	// 主动扫描：ping 网段内所有 IP 以填充 ARP 表
+	// 先对网段做 ping 扫描，让系统 ARP 表填充起来
 	s.pingSweep(cidr)
-	
-	// 再次读取 ARP 表
+
+	// 等待系统写入 ARP 表
 	time.Sleep(500 * time.Millisecond)
-	newDevices := s.readARPTable()
-	
-	// 合并结果
-	deviceMap := make(map[string]*Device)
+
+	devices := s.readARPTable()
+
+	// 过滤：只保留目标网段内的设备
+	result := make([]*Device, 0, len(devices))
 	for _, d := range devices {
-		deviceMap[d.IP] = d
+		if ipInCIDR(d.IP, cidr) {
+			d.Source = "arp"
+			result = append(result, d)
+		}
 	}
-	for _, d := range newDevices {
-		deviceMap[d.IP] = d
-	}
-	
-	result := make([]*Device, 0, len(deviceMap))
-	for _, d := range deviceMap {
-		d.Source = "arp"
-		result = append(result, d)
-	}
-	
 	return result, nil
 }
 
-// readARPTable 从系统 ARP 缓存读取
+// macOS `arp -a` 输出行格式：
+// ? (192.168.1.1) at a4:2b:b0:11:22:33 on en0 ifscope [ethernet]
+var darwinArpLine = regexp.MustCompile(`\(([\d.]+)\) at ([0-9a-fA-F:]+) on`)
+
+// readARPTable 读取系统 ARP 缓存（跨平台）
 func (s *ARPScanner) readARPTable() []*Device {
+	switch runtime.GOOS {
+	case "darwin":
+		return readARPTableDarwin()
+	case "linux":
+		return readARPTableLinux()
+	default:
+		return nil
+	}
+}
+
+// readARPTableDarwin 解析 macOS 的 `arp -a` 输出
+func readARPTableDarwin() []*Device {
+	cmd := exec.Command("arp", "-a", "-n")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+
+	var devices []*Device
+	now := time.Now()
+	for _, line := range strings.Split(string(out), "\n") {
+		m := darwinArpLine.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		ip, mac := m[1], strings.ToLower(m[2])
+		if mac == "00:00:00:00:00:00" {
+			continue
+		}
+		devices = append(devices, newARPDevice(ip, mac, now))
+	}
+	return devices
+}
+
+// readARPTableLinux 解析 Linux 的 /proc/net/arp
+func readARPTableLinux() []*Device {
 	file, err := os.Open("/proc/net/arp")
 	if err != nil {
 		return nil
@@ -62,45 +96,43 @@ func (s *ARPScanner) readARPTable() []*Device {
 	defer file.Close()
 
 	var devices []*Device
+	now := time.Now()
 	scanner := bufio.NewScanner(file)
 	scanner.Scan() // 跳过表头
-	
+
 	for scanner.Scan() {
 		fields := strings.Fields(scanner.Text())
 		if len(fields) < 6 {
 			continue
 		}
-		
-		ip := fields[0]
-		mac := fields[3]
-		
-		// 跳过不完整的条目
+		ip, mac := fields[0], strings.ToLower(fields[3])
 		if mac == "00:00:00:00:00:00" {
 			continue
 		}
-		
-		device := &Device{
-			IP:        ip,
-			MAC:       mac,
-			Status:    "online",
-			FirstSeen: time.Now(),
-			LastSeen:  time.Now(),
-		}
-		
-		// 反向解析主机名
-		names, _ := net.LookupAddr(ip)
-		if len(names) > 0 {
-			device.Hostname = strings.TrimSuffix(names[0], ".")
-		}
-		
-		device.Vendor = LookupVendor(mac)
-		devices = append(devices, device)
+		devices = append(devices, newARPDevice(ip, mac, now))
 	}
-	
 	return devices
 }
 
-// pingSweep 对网段内所有 IP 发送 ping 以触发 ARP
+// newARPDevice 构造 ARP 设备条目，附带主机名与厂商
+func newARPDevice(ip, mac string, now time.Time) *Device {
+	device := &Device{
+		IP:        ip,
+		MAC:       mac,
+		Status:    "online",
+		FirstSeen: now,
+		LastSeen:  now,
+	}
+
+	if names, err := net.LookupAddr(ip); err == nil && len(names) > 0 {
+		device.Hostname = strings.TrimSuffix(names[0], ".")
+	}
+
+	device.Vendor = LookupVendor(mac)
+	return device
+}
+
+// pingSweep 对网段内所有 IP 发送 ping 以触发 ARP 解析
 func (s *ARPScanner) pingSweep(cidr string) {
 	ip, ipNet, err := net.ParseCIDR(cidr)
 	if err != nil {
@@ -109,69 +141,26 @@ func (s *ARPScanner) pingSweep(cidr string) {
 
 	var wg sync.WaitGroup
 	semaphore := make(chan struct{}, 50) // 并发限制
-	
-	for ip := ip.Mask(ipNet.Mask); ipNet.Contains(ip); incrementIP(ip) {
-		if ip.IsLoopback() || ip.Equal(getBroadcastIP(ipNet)) {
+
+	for target := ip.Mask(ipNet.Mask); ipNet.Contains(target); incrementIP(target) {
+		if target.IsLoopback() {
 			continue
 		}
-		
+
 		wg.Add(1)
 		semaphore <- struct{}{}
-		
-		go func(target string) {
+
+		go func(addr string) {
 			defer wg.Done()
 			defer func() { <-semaphore }()
-			pingHost(target)
-		}(ip.String())
+			Ping(addr, s.timeout)
+		}(target.String())
 	}
-	
+
 	wg.Wait()
 }
 
-// pingHost 发送单个 ICMP ping
-func pingHost(ip string) {
-	conn, err := net.DialTimeout("ip4:icmp", ip, 1*time.Second)
-	if err != nil {
-		return
-	}
-	defer conn.Close()
-	
-	// 构造 ICMP Echo Request
-	msg := make([]byte, 8)
-	msg[0] = 8  // Echo Request
-	msg[1] = 0  // Code
-	msg[2] = 0  // Checksum (高)
-	msg[3] = 0  // Checksum (低)
-	msg[4] = 0  // Identifier
-	msg[5] = 1  // Identifier
-	msg[6] = 0  // Sequence
-	msg[7] = 1  // Sequence
-	
-	// 计算校验和
-	checksum := checkSum(msg)
-	msg[2] = byte(checksum >> 8)
-	msg[3] = byte(checksum & 0xff)
-	
-	conn.SetDeadline(time.Now().Add(1 * time.Second))
-	conn.Write(msg)
-}
-
-// checkSum 计算 ICMP 校验和
-func checkSum(data []byte) uint16 {
-	var sum uint32
-	for i := 0; i < len(data)-1; i += 2 {
-		sum += uint32(data[i])<<8 + uint32(data[i+1])
-	}
-	if len(data)%2 == 1 {
-		sum += uint32(data[len(data)-1]) << 8
-	}
-	for (sum >> 16) > 0 {
-		sum = (sum & 0xffff) + (sum >> 16)
-	}
-	return uint16(^sum)
-}
-
-// incrementIP IP 地址递增
+// incrementIP IP 地址递增（原地修改）
 func incrementIP(ip net.IP) {
 	for j := len(ip) - 1; j >= 0; j-- {
 		ip[j]++
@@ -188,4 +177,14 @@ func getBroadcastIP(ipNet *net.IPNet) net.IP {
 		broadcast[i] = ipNet.IP[i] | ^ipNet.Mask[i]
 	}
 	return broadcast
+}
+
+// ipInCIDR 判断 IP 是否落在 CIDR 网段内
+func ipInCIDR(ipStr, cidr string) bool {
+	ip := net.ParseIP(ipStr)
+	_, ipNet, err := net.ParseCIDR(cidr)
+	if err != nil || ip == nil {
+		return false
+	}
+	return ipNet.Contains(ip)
 }
