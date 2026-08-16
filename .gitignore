@@ -1,0 +1,38 @@
+# Go
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+/vendor/
+/server/server
+/server/bin/
+
+# Node
+node_modules/
+dist/
+build/
+*.log
+.npm
+.yarn-integrity
+
+# React Native
+mobile/android/app/build/
+mobile/android/build/
+mobile/android/local.properties
+mobile/android/.gradle/
+mobile/ios/Pods/
+mobile/ios/build/
+mobile/.expo/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Env
+.env
+.env.local
