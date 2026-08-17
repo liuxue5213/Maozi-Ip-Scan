@@ -6,7 +6,9 @@ import {
   StyleSheet,
   TouchableOpacity,
   Alert,
-  RefreshControl
+  RefreshControl,
+  PermissionsAndroid,
+  Platform
 } from 'react-native'
 import {
   Button,
@@ -40,8 +42,31 @@ export default function ScanScreen() {
   const [refreshing, setRefreshing] = useState(false)
 
   useEffect(() => {
-    loadNetworkInfo()
+    initPermissionsAndNetwork()
   }, [])
+
+  // Android 10+ 读取 WiFi 名称(SSID)需要定位权限，启动时申请
+  const initPermissionsAndNetwork = async () => {
+    try {
+      if (Platform.OS === 'android' && Platform.Version >= 29) {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+          {
+            title: '位置权限申请',
+            message: '读取 WiFi 名称(SSID)需要定位权限。\n拒绝不影响扫描功能，仅 WiFi 名称会显示为 N/A。',
+            buttonPositive: '允许',
+            buttonNegative: '拒绝'
+          }
+        )
+        if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+          console.log('Location permission denied, SSID will be unavailable')
+        }
+      }
+    } catch (e) {
+      console.warn('Request location permission failed:', e)
+    }
+    await loadNetworkInfo()
+  }
 
   const loadNetworkInfo = async () => {
     try {
@@ -68,7 +93,9 @@ export default function ScanScreen() {
           setProgress(Math.min(current / total, 1))
         },
         (device) => {
-          setDevices(prev => [...prev, device])
+          setDevices(prev =>
+            prev.some(p => p.ip === device.ip) ? prev : [...prev, device]
+          )
         },
         portScan
       )

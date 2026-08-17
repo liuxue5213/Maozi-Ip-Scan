@@ -51,56 +51,61 @@ export async function readArpTable(): Promise<DeviceInfo[]> {
   }
 }
 
-// Ping 扫描（通过原生模块）
+// Ping 扫描（工作池模式：N 个 worker 持续消费队列，不会整批等最慢的）
 export async function pingSweep(
   cidr: string,
-  onProgress?: (current: number, total: number) => void
+  onProgress?: (current: number, total: number) => void,
+  onFound?: (device: DeviceInfo) => void
 ): Promise<DeviceInfo[]> {
   const [network, prefixStr] = cidr.split('/')
   const prefix = parseInt(prefixStr, 10)
-  
-  const totalIPs = Math.pow(2, 32 - prefix) - 2
-  const devices: DeviceInfo[] = []
-  
-  // 使用并发 ping
-  const concurrency = 20
-  const ip = network.split('.').map(Number)
-  let currentIP = `${ip[0]}.${ip[1]}.${ip[2]}.1`
+
+  // 生成待扫描 IP 队列（跳过网络地址和广播地址）
+  const queue: string[] = []
+  const ipParts = network.split('.').map(Number)
+  let currentIP = `${ipParts[0]}.${ipParts[1]}.${ipParts[2]}.1`
   const broadcast = getBroadcastIP(cidr)
-  
-  let scanned = 0
-  
   while (currentIP !== broadcast) {
-    const batch: string[] = []
-    for (let i = 0; i < concurrency && currentIP !== broadcast; i++) {
-      if (!currentIP.startsWith('127.')) {
-        batch.push(currentIP)
-      }
-      currentIP = incrementIP(currentIP)
-      scanned++
+    if (!currentIP.startsWith('127.')) {
+      queue.push(currentIP)
     }
-    
-    // 并发 ping 一批
-    const results = await Promise.all(batch.map(ip => pingHost(ip)))
-    results.forEach((online, idx) => {
+    currentIP = incrementIP(currentIP)
+  }
+  const total = queue.length
+
+  const devices: DeviceInfo[] = []
+  let scanned = 0
+  const CONCURRENCY = 100 // 并发 worker 数
+
+  const worker = async () => {
+    while (queue.length > 0) {
+      const target = queue.shift()
+      if (!target) break
+
+      const online = await pingHost(target)
+      scanned++
+
       if (online) {
-        devices.push({
-          ip: batch[idx],
+        const device: DeviceInfo = {
+          ip: target,
           mac: '',
           hostname: '',
           vendor: '',
           status: 'online',
           source: 'icmp'
-        })
+        }
+        devices.push(device)
+        onFound?.(device)
       }
-    })
-    
-    onProgress?.(scanned, totalIPs)
-    
-    // 控制扫描速度
-    await sleep(10)
+
+      if (scanned % 10 === 0 || queue.length === 0) {
+        onProgress?.(scanned, total)
+      }
+    }
   }
-  
+
+  await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()))
+  onProgress?.(total, total)
   return devices
 }
 
@@ -125,38 +130,55 @@ export async function scanNetwork(
 ): Promise<DeviceInfo[]> {
 	const deviceMap = new Map<string, DeviceInfo>()
 
-	// ARP 扫描
-	if (modes.includes('arp')) {
-		const arpDevices = await readArpTable()
-		arpDevices.forEach(d => {
-			// 检查是否在目标网段内
-			if (isIPInCIDR(d.ip, cidr)) {
-				deviceMap.set(d.ip, d)
-				onDeviceFound?.(d)
-			}
-		})
-	}
+	// ARP 表读取与 ICMP 扫描并行执行
+	const arpTask = modes.includes('arp') ? readArpTable() : Promise.resolve([] as DeviceInfo[])
+	const icmpTask = modes.includes('icmp')
+		? pingSweep(cidr, onProgress, (d) => {
+				// ICMP 发现的设备立即上报（增量 UI）
+				if (isIPInCIDR(d.ip, cidr)) {
+					onDeviceFound?.(d)
+				}
+			})
+		: Promise.resolve([] as DeviceInfo[])
 
-	// ICMP 扫描
-	if (modes.includes('icmp')) {
-		const icmpDevices = await pingSweep(cidr, onProgress)
-		icmpDevices.forEach(d => {
-			if (deviceMap.has(d.ip)) {
-				// 合并信息
-				const existing = deviceMap.get(d.ip)!
-				if (!existing.hostname && d.hostname) {
-					existing.hostname = d.hostname
+	const [arpDevices, icmpDevices] = await Promise.all([arpTask, icmpTask])
+
+	// 先合入 ARP 结果（带 MAC/厂商信息）
+	arpDevices.forEach(d => {
+		if (isIPInCIDR(d.ip, cidr)) {
+			deviceMap.set(d.ip, d)
+			onDeviceFound?.(d)
+		}
+	})
+
+	// 再合入 ICMP 结果（无 MAC，等下一步回填）
+	icmpDevices.forEach(d => {
+		if (!deviceMap.has(d.ip)) {
+			deviceMap.set(d.ip, d)
+		}
+	})
+
+	// ping 扫描会触发系统解析 ARP，再读一次补全 MAC/厂商，
+	// 还能捞到 isReachable 漏掉但 ARP 已解析的设备
+	if (modes.includes('arp')) {
+		const refreshed = await readArpTable()
+		refreshed.forEach(d => {
+			if (!isIPInCIDR(d.ip, cidr)) return
+			const existing = deviceMap.get(d.ip)
+			if (existing) {
+				if (!existing.mac && d.mac) {
+					existing.mac = d.mac
+					existing.vendor = d.vendor
 				}
 			} else {
 				deviceMap.set(d.ip, d)
-				onDeviceFound?.(d)
 			}
 		})
 	}
 
 	const devices = Array.from(deviceMap.values())
 
-	// 端口扫描（可选）
+	// 端口扫描（可选，内部已是并发工作池）
 	if (portScan && devices.length > 0) {
 		await scanDevicePorts(devices, onProgress)
 	}
@@ -254,11 +276,6 @@ function isIPInCIDR(ip: string, cidr: string): boolean {
 function ipToNumber(ip: string): number {
   const parts = ip.split('.').map(Number)
   return ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0
-}
-
-// 延迟
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms))
 }
 
 export default {
