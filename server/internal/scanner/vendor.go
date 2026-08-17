@@ -92,7 +92,6 @@ var ouiDatabase = map[string]string{
 	"4c:79:6e": "Intel",
 	"00:1e:65": "Intel",
 	"8c:85:90": "Intel",
-	"28:6c:07": "Intel",
 	"00:21:5d": "Intel",
 	"00:22:fa": "Intel",
 	"68:05:ca": "Intel",
@@ -126,7 +125,6 @@ var ouiDatabase = map[string]string{
 	"00:24:d7": "Intel",
 	"e0:94:67": "Intel",
 	"e0:9d:31": "Intel",
-	"4c:34:88": "Intel",
 	"80:86:f2": "Intel",
 	"00:1b:21": "Intel",
 	"00:1c:c0": "Intel",
@@ -134,8 +132,6 @@ var ouiDatabase = map[string]string{
 	"00:1d:e1": "Intel",
 	"00:21:5a": "Intel",
 	"00:21:5b": "Intel",
-	"00:22:fa": "Intel",
-	"00:22:fb": "Intel",
 }
 
 // LookupVendor 根据 MAC 地址查询设备厂商
