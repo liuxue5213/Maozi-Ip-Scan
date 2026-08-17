@@ -1,6 +1,17 @@
 import { NativeModules, Platform } from 'react-native'
 import NetInfo from '@react-native-community/netinfo'
 
+// 端口状态
+export type PortState = 'open' | 'closed' | 'filtered'
+
+// 端口扫描详情
+export interface PortDetail {
+  port: number
+  state: PortState
+  service: string  // 服务名称
+  banner?: string  // 抓取到的版本信息
+}
+
 // 设备信息类型
 export interface DeviceInfo {
   ip: string
@@ -9,7 +20,10 @@ export interface DeviceInfo {
   vendor: string
   status: 'online' | 'offline'
   source: string
-  openPorts?: number[]
+  openPorts?: number[]        // 兼容旧版
+  ports?: PortDetail[]        // 端口详情（含状态/服务/版本）
+  deviceType?: string         // 推断的设备类型
+  osName?: string             // 推断的操作系统
 }
 
 // 网络信息

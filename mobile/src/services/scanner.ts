@@ -194,7 +194,7 @@ async function scanDevicePorts(
 	const total = devices.length * MOBILE_SCAN_PORTS.length
 	let done = 0
 
-	const concurrency = 20
+	const CONCURRENCY = 30
 	const queue: Array<{ ip: string; port: number }> = []
 	for (const d of devices) {
 		for (const p of MOBILE_SCAN_PORTS) {
@@ -202,60 +202,95 @@ async function scanDevicePorts(
 		}
 	}
 
-	async function worker(deviceMap: Map<string, DeviceInfo>) {
+	// 每个设备的端口结果暂存
+	const portResultMap = new Map<string, Array<{ port: number; state: 'open' | 'closed' | 'filtered'; banner?: string }>>()
+	for (const d of devices) {
+		portResultMap.set(d.ip, [])
+	}
+
+	async function worker() {
 		while (queue.length > 0) {
 			const job = queue.shift()
 			if (!job) break
-			const open = await tcpProbe(job.ip, job.port, 2000)
+			const result = await tcpProbe(job.ip, job.port, 2000)
 			done++
-			onProgress?.(done, total)
-			if (open) {
-				const d = deviceMap.get(job.ip)
-				if (d) {
-					d.openPorts = d.openPorts || []
-					if (!d.openPorts.includes(job.port)) {
-						d.openPorts.push(job.port)
-					}
-				}
+			if (done % 5 === 0 || queue.length === 0) {
+				onProgress?.(done, total)
 			}
+			portResultMap.get(job.ip)?.push({ port: job.port, ...result })
 		}
 	}
 
-	const deviceMap = new Map(devices.map(d => [d.ip, d]))
-	const workers = Array.from({ length: concurrency }, () => worker(deviceMap))
+	const workers = Array.from({ length: CONCURRENCY }, () => worker())
 	await Promise.all(workers)
 
-	// 排序端口
+	// 合并结果到设备
 	for (const d of devices) {
-		if (d.openPorts) {
-			d.openPorts.sort((a, b) => a - b)
-		}
+		const results = portResultMap.get(d.ip) || []
+		results.sort((a, b) => a.port - b.port)
+
+		// 新版详细端口列表
+		d.ports = results.map(r => ({
+			port: r.port,
+			state: r.state,
+			service: getServiceName(r.port),
+			banner: r.banner
+		}))
+
+		// 兼容旧版 openPorts（仅开放的）
+		d.openPorts = results.filter(r => r.state === 'open').map(r => r.port)
+
+		// 推断设备类型/系统
+		const fingerprint = fingerprintDevice(d, results)
+		d.deviceType = fingerprint.deviceType
+		d.osName = fingerprint.osName
 	}
 }
 
-// TCP connect 探测单个端口（手动超时控制，避免 ConnectionOptions 兼容问题）
-function tcpProbe(ip: string, port: number, timeoutMs: number): Promise<boolean> {
+// TCP connect 探测单个端口，返回状态 + 抓取到的 banner
+function tcpProbe(ip: string, port: number, timeoutMs: number): Promise<{ state: 'open' | 'closed' | 'filtered'; banner?: string }> {
 	return new Promise(resolve => {
 		let socket: ReturnType<typeof TcpSocket.createConnection> | null = null
 		let resolved = false
 		let timer: ReturnType<typeof setTimeout> | null = null
+		let banner = ''
 
-		const finish = (result: boolean) => {
+		const finish = (state: 'open' | 'closed' | 'filtered') => {
 			if (resolved) return
 			resolved = true
 			if (timer) clearTimeout(timer)
 			if (socket) {
 				try { socket.destroy() } catch { /* ignore */ }
 			}
-			resolve(result)
+			// 仅 open 端口返回 banner
+			resolve(state === 'open' ? { state, banner: banner || undefined } : { state })
 		}
 
 		try {
-			socket = TcpSocket.createConnection({ port, host: ip }, () => finish(true))
-			socket.on('error', () => finish(false))
-			timer = setTimeout(() => finish(false), timeoutMs)
+			socket = TcpSocket.createConnection({ port, host: ip }, () => {
+				// 连接成功 = open，尝试抓取 banner
+				socket!.setTimeout(timeoutMs)
+				socket!.on('data', (data: Buffer | string) => {
+					const text = typeof data === 'string' ? data : data.toString('utf-8')
+					if (!banner) banner = text.slice(0, 200).replace(/[\r\n]/g, ' ').trim()
+					// 拿到 banner 就可以关了
+					finish('open')
+				})
+				// 有些服务不发 banner，等一小段时间没数据就判定 open
+				timer = setTimeout(() => finish('open'), Math.min(timeoutMs, 1500))
+			})
+			socket.on('error', (err: any) => {
+				// ECONNRESET = closed（端口关闭），其他 = 可能 filtered
+				const msg = String(err?.message || '')
+				if (msg.includes('ECONNRESET') || msg.includes('Connection refused')) {
+					finish('closed')
+				} else {
+					finish('filtered')
+				}
+			})
+			socket.on('timeout', () => finish('filtered'))
 		} catch {
-			finish(false)
+			finish('filtered')
 		}
 	})
 }
@@ -276,6 +311,68 @@ function isIPInCIDR(ip: string, cidr: string): boolean {
 function ipToNumber(ip: string): number {
   const parts = ip.split('.').map(Number)
   return ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0
+}
+
+// 根据开放端口推断设备类型和操作系统（类似 nmap -O 的简化版）
+function fingerprintDevice(
+	device: DeviceInfo,
+	portResults: Array<{ port: number; state: 'open' | 'closed' | 'filtered' }>
+): { deviceType: string; osName: string } {
+	const openPorts = new Set(portResults.filter(r => r.state === 'open').map(r => r.port))
+	const filteredPorts = new Set(portResults.filter(r => r.state === 'filtered').map(r => r.port))
+
+	// 设备类型推断
+	if (openPorts.has(9100) || openPorts.has(515) || openPorts.has(631)) {
+		return { deviceType: '打印机', osName: guessOS(openPorts) }
+	}
+	if (openPorts.has(554) || openPorts.has(8554) || openPorts.has(37777) || openPorts.has(9000)) {
+		return { deviceType: '摄像头/NVR', osName: guessOS(openPorts) }
+	}
+	if (openPorts.has(80) || openPorts.has(443) || openPorts.has(8080) || openPorts.has(8443)) {
+		// 可能是路由器/智能设备/Web 服务器
+		if (openPorts.has(22) && openPorts.has(80)) {
+			return { deviceType: '路由器/网关', osName: guessOS(openPorts) }
+		}
+		if (openPorts.has(80) || openPorts.has(443)) {
+			return { deviceType: 'Web 设备', osName: guessOS(openPorts) }
+		}
+	}
+	if (openPorts.has(3306)) return { deviceType: '数据库服务器', osName: 'MySQL' }
+	if (openPorts.has(5432)) return { deviceType: '数据库服务器', osName: 'PostgreSQL' }
+	if (openPorts.has(6379)) return { deviceType: '缓存服务器', osName: 'Redis' }
+	if (openPorts.has(27017)) return { deviceType: '数据库服务器', osName: 'MongoDB' }
+	if (openPorts.has(1433)) return { deviceType: '数据库服务器', osName: 'MSSQL' }
+	if (openPorts.has(5900) || openPorts.has(5901)) return { deviceType: '远程桌面', osName: guessOS(openPorts) }
+	if (openPorts.has(3389)) return { deviceType: '远程桌面', osName: 'Windows' }
+	if (openPorts.has(445) || openPorts.has(139) || openPorts.has(135)) {
+		return { deviceType: '文件服务器', osName: 'Windows' }
+	}
+	if (openPorts.has(21) && openPorts.has(22)) {
+		return { deviceType: '文件/开发服务器', osName: guessOS(openPorts) }
+	}
+	if (openPorts.has(22)) {
+		return { deviceType: 'Linux/Unix 服务器', osName: guessOS(openPorts) }
+	}
+	if (openPorts.has(53)) return { deviceType: 'DNS 服务器', osName: guessOS(openPorts) }
+
+	// 有过滤端口但没有开放端口 → 可能是防火墙后的设备
+	if (filteredPorts.size > 0 && openPorts.size === 0) {
+		return { deviceType: '防火墙/安全设备', osName: 'Unknown' }
+	}
+
+	return { deviceType: 'Unknown', osName: guessOS(openPorts) }
+}
+
+// 根据端口组合推断操作系统
+function guessOS(openPorts: Set<number>): string {
+	if (openPorts.has(3389) || openPorts.has(445) || openPorts.has(135) || openPorts.has(139)) return 'Windows'
+	if (openPorts.has(22) && !openPorts.has(3389)) {
+		// 22 常见于 Linux/Unix，也可能是网络设备
+		if (openPorts.has(80) || openPorts.has(443) || openPorts.has(8080)) return 'Linux/Unix'
+		return 'Linux/Unix/网络设备'
+	}
+	if (openPorts.has(80) || openPorts.has(443) || openPorts.has(8080)) return 'Linux/Unix'
+	return 'Unknown'
 }
 
 export default {
