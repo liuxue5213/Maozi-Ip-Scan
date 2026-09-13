@@ -2,17 +2,26 @@ import { NativeModules, Platform } from 'react-native'
 import TcpSocket from 'react-native-tcp-socket'
 import { DeviceInfo, getNetworkInfo, generateCIDR, incrementIP, getBroadcastIP, lookupVendor } from './network'
 
-// 移动端常用端口（精简版，避免扫描过慢）
-const MOBILE_SCAN_PORTS = [22, 80, 443, 445, 3389, 8080, 21, 23, 53, 3306, 5432, 5900, 6379, 8443]
+// 移动端常用端口（覆盖打印机/摄像头/IoT 指纹所需端口）
+const MOBILE_SCAN_PORTS = [
+  22, 80, 443, 445, 3389, 8080, 21, 23, 53, 135, 139,
+  3306, 5432, 5900, 6379, 8443, 554, 9100, 631, 515, 8009, 1883
+]
 
 // 端口 -> 服务名称
 const PORT_SERVICE: Record<string, string> = {
   '21': 'FTP', '22': 'SSH', '23': 'Telnet', '25': 'SMTP', '53': 'DNS',
   '80': 'HTTP', '110': 'POP3', '135': 'MS-RPC', '139': 'NetBIOS', '143': 'IMAP',
-  '443': 'HTTPS', '445': 'SMB', '993': 'IMAPS', '995': 'POP3S',
+  '443': 'HTTPS', '445': 'SMB', '515': 'LPD', '631': 'IPP', '554': 'RTSP',
+  '993': 'IMAPS', '995': 'POP3S', '1883': 'MQTT', '8009': 'Chromecast',
   '1433': 'MSSQL', '3306': 'MySQL', '3389': 'RDP', '5432': 'PostgreSQL',
   '5900': 'VNC', '6379': 'Redis', '8080': 'HTTP-Proxy', '8443': 'HTTPS-Alt',
-  '27017': 'MongoDB',
+  '9100': 'Printer', '27017': 'MongoDB',
+}
+
+// 扫描取消令牌：置 cancelled 后，各工作池在取下一个任务前退出
+export class ScanCancel {
+  cancelled = false
 }
 
 export function getServiceName(port: number): string {
@@ -55,7 +64,8 @@ export async function readArpTable(): Promise<DeviceInfo[]> {
 export async function pingSweep(
   cidr: string,
   onProgress?: (current: number, total: number) => void,
-  onFound?: (device: DeviceInfo) => void
+  onFound?: (device: DeviceInfo) => void,
+  cancel?: ScanCancel
 ): Promise<DeviceInfo[]> {
   const [network, prefixStr] = cidr.split('/')
   const prefix = parseInt(prefixStr, 10)
@@ -79,6 +89,10 @@ export async function pingSweep(
 
   const worker = async () => {
     while (queue.length > 0) {
+      if (cancel?.cancelled) {
+        queue.length = 0
+        break
+      }
       const target = queue.shift()
       if (!target) break
 
@@ -110,11 +124,20 @@ export async function pingSweep(
 }
 
 // 单个主机 ping
+// 优先 InetAddress.isReachable（无 root 时是 TCP echo，很多设备不响应），
+// 失败时回退到 /system/bin/ping 发真正的 ICMP echo，显著提升发现率
 export async function pingHost(ip: string): Promise<boolean> {
   if (Platform.OS !== 'android') return false
-  
+
   try {
-    return await ArpModule.ping(ip, 1000)
+    if (await ArpModule.ping(ip, 1000)) return true
+  } catch {
+    // ignore，走系统 ping 兜底
+  }
+
+  try {
+    const result = await ArpModule.systemPing(ip, 1)
+    return !!result?.success
   } catch {
     return false
   }
@@ -126,7 +149,8 @@ export async function scanNetwork(
   modes: string[],
   onProgress?: (current: number, total: number) => void,
   onDeviceFound?: (device: DeviceInfo) => void,
-  portScan?: boolean
+  portScan?: boolean,
+  cancel?: ScanCancel
 ): Promise<DeviceInfo[]> {
 	const deviceMap = new Map<string, DeviceInfo>()
 
@@ -138,7 +162,7 @@ export async function scanNetwork(
 				if (isIPInCIDR(d.ip, cidr)) {
 					onDeviceFound?.(d)
 				}
-			})
+			}, cancel)
 		: Promise.resolve([] as DeviceInfo[])
 
 	const [arpDevices, icmpDevices] = await Promise.all([arpTask, icmpTask])
@@ -178,9 +202,11 @@ export async function scanNetwork(
 
 	const devices = Array.from(deviceMap.values())
 
+	if (cancel?.cancelled) return devices
+
 	// 端口扫描（可选，内部已是并发工作池）
 	if (portScan && devices.length > 0) {
-		await scanDevicePorts(devices, onProgress)
+		await scanDevicePorts(devices, onProgress, cancel)
 	}
 
 	return devices
@@ -189,7 +215,8 @@ export async function scanNetwork(
 // 端口扫描：对设备列表做 TCP connect 扫描
 async function scanDevicePorts(
 	devices: DeviceInfo[],
-	onProgress?: (current: number, total: number) => void
+	onProgress?: (current: number, total: number) => void,
+	cancel?: ScanCancel
 ): Promise<void> {
 	const total = devices.length * MOBILE_SCAN_PORTS.length
 	let done = 0
@@ -210,6 +237,10 @@ async function scanDevicePorts(
 
 	async function worker() {
 		while (queue.length > 0) {
+			if (cancel?.cancelled) {
+				queue.length = 0
+				break
+			}
 			const job = queue.shift()
 			if (!job) break
 			const result = await tcpProbe(job.ip, job.port, 2000)

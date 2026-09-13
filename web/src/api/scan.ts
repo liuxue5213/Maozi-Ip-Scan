@@ -24,6 +24,7 @@ export interface Device {
   firstSeen: string
   lastSeen: string
   openPorts?: number[]
+  portServices?: Record<number, string>
   source: string
 }
 

@@ -132,18 +132,20 @@ func newARPDevice(ip, mac string, now time.Time) *Device {
 	return device
 }
 
-// pingSweep 对网段内所有 IP 发送 ping 以触发 ARP 解析
+// pingSweep 对网段内所有 IP 发送 ping 以触发 ARP 解析（跳过网络地址与广播地址）
 func (s *ARPScanner) pingSweep(cidr string) {
 	ip, ipNet, err := net.ParseCIDR(cidr)
 	if err != nil {
 		return
 	}
 
+	broadcast := getBroadcastIP(ipNet)
+
 	var wg sync.WaitGroup
 	semaphore := make(chan struct{}, 50) // 并发限制
 
 	for target := ip.Mask(ipNet.Mask); ipNet.Contains(target); incrementIP(target) {
-		if target.IsLoopback() {
+		if target.IsLoopback() || target.Equal(ipNet.IP) || target.Equal(broadcast) {
 			continue
 		}
 

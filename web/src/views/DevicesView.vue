@@ -28,8 +28,21 @@
         </el-button>
       </div>
 
-      <el-table :data="scanStore.devices" stripe style="width: 100%">
-        <el-table-column prop="ip" label="IP 地址" width="150">
+      <div class="table-toolbar">
+        <el-input
+          v-model="keyword"
+          placeholder="搜索 IP / 主机名 / 厂商 / 备注"
+          clearable
+          style="width: 260px"
+          :prefix-icon="Search"
+        />
+        <el-tag type="info" size="small">
+          显示 {{ filteredDevices.length }} / {{ scanStore.devices.length }} 台
+        </el-tag>
+      </div>
+
+      <el-table :data="filteredDevices" stripe style="width: 100%">
+        <el-table-column prop="ip" label="IP 地址" width="150" sortable :sort-method="sortByIP">
           <template #default="{ row }">
             <span class="ip-cell">{{ row.ip }}</span>
             <el-button
@@ -64,7 +77,7 @@
           </template>
         </el-table-column>
         
-        <el-table-column label="开放端口" min-width="160">
+        <el-table-column label="开放端口" min-width="180">
           <template #default="{ row }">
             <span v-if="!row.openPorts || row.openPorts.length === 0" style="color: #c0c4cc">-</span>
             <el-tag
@@ -75,7 +88,7 @@
               effect="plain"
               style="margin: 0 2px; font-family: monospace"
             >
-              {{ port }}
+              {{ port }}{{ row.portServices?.[port] ? ' ' + row.portServices[port] : '' }}
             </el-tag>
           </template>
         </el-table-column>
@@ -179,10 +192,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Refresh, DocumentCopy, Connection, Position, Download, ArrowDown, Edit } from '@element-plus/icons-vue'
+import { Refresh, DocumentCopy, Connection, Position, Download, ArrowDown, Edit, Search } from '@element-plus/icons-vue'
 import { useScanStore } from '@/stores/scan'
 import notesApi, { NOTE_COLORS, DeviceNote } from '@/api/notes'
 
@@ -192,6 +205,30 @@ const scanStore = useScanStore()
 onMounted(() => {
   scanStore.refreshDevices()
 })
+
+// ---- 过滤与排序 ----
+const keyword = ref('')
+
+const filteredDevices = computed(() => {
+  const kw = keyword.value.trim().toLowerCase()
+  const list = kw
+    ? scanStore.devices.filter((d: any) =>
+        [d.ip, d.mac, d.hostname, d.vendor, d.noteName, d.note]
+          .some(v => v && String(v).toLowerCase().includes(kw))
+      )
+    : [...scanStore.devices]
+  return list.sort(sortByIP)
+})
+
+// IP 按数字排序（避免 192.168.1.10 排在 192.168.1.2 前面）
+function sortByIP(a: any, b: any) {
+  const pa = a.ip.split('.').map(Number)
+  const pb = b.ip.split('.').map(Number)
+  for (let i = 0; i < 4; i++) {
+    if (pa[i] !== pb[i]) return pa[i] - pb[i]
+  }
+  return 0
+}
 
 function copyText(text: string) {
   navigator.clipboard.writeText(text)
@@ -255,6 +292,13 @@ async function pingDevice(ip: string) {
 </script>
 
 <style scoped>
+.table-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
 .ip-cell {
   font-family: 'Courier New', monospace;
   font-weight: 600;

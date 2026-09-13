@@ -123,6 +123,22 @@ export function lookupVendor(mac: string): string {
   return vendorMap[prefix] || ''
 }
 
+// 根据设备类型返回 MaterialCommunityIcons 图标名（配合 react-native-paper 的 icon 属性）
+export function getDeviceIcon(deviceType?: string): string {
+  if (!deviceType || deviceType === 'Unknown') return 'help-network'
+  if (deviceType.includes('打印机')) return 'printer'
+  if (deviceType.includes('摄像头') || deviceType.includes('NVR')) return 'cctv'
+  if (deviceType.includes('路由器') || deviceType.includes('网关')) return 'router-wireless'
+  if (deviceType.includes('防火墙')) return 'shield-lock'
+  if (deviceType.includes('远程桌面')) return 'monitor'
+  if (deviceType.includes('数据库') || deviceType.includes('缓存')) return 'database'
+  if (deviceType.includes('文件')) return 'server-network'
+  if (deviceType.includes('DNS')) return 'dns'
+  if (deviceType.includes('Linux') || deviceType.includes('服务器')) return 'server'
+  if (deviceType.includes('Web')) return 'web'
+  return 'chip'
+}
+
 // IP 地址递增
 export function incrementIP(ip: string): string {
   const parts = ip.split('.').map(Number)
@@ -157,6 +173,7 @@ export default {
   generateCIDR,
   subnetToPrefix,
   lookupVendor,
+  getDeviceIcon,
   incrementIP,
   getBroadcastIP
 }

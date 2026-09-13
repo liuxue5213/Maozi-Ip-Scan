@@ -4,15 +4,16 @@ import "time"
 
 // Device 表示扫描发现的网络设备
 type Device struct {
-	IP          string    `json:"ip"`
-	MAC         string    `json:"mac"`
-	Hostname    string    `json:"hostname"`
-	Vendor      string    `json:"vendor"`
-	Status      string    `json:"status"` // online, offline
-	FirstSeen   time.Time `json:"firstSeen"`
-	LastSeen    time.Time `json:"lastSeen"`
-	OpenPorts   []int     `json:"openPorts,omitempty"`
-	Source      string    `json:"source"` // arp, icmp, mdns
+	IP           string         `json:"ip"`
+	MAC          string         `json:"mac"`
+	Hostname     string         `json:"hostname"`
+	Vendor       string         `json:"vendor"`
+	Status       string         `json:"status"` // online, offline
+	FirstSeen    time.Time      `json:"firstSeen"`
+	LastSeen     time.Time      `json:"lastSeen"`
+	OpenPorts    []int          `json:"openPorts,omitempty"`
+	PortServices map[int]string `json:"portServices,omitempty"` // 端口 -> 服务名称
+	Source       string         `json:"source"`                 // arp, icmp, mdns
 }
 
 // NetworkInterface 表示一个网络接口

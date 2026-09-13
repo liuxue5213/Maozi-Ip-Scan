@@ -22,8 +22,12 @@ var portServiceMap = map[int]string{
 	143:  "IMAP",
 	443:  "HTTPS",
 	445:  "SMB",
+	515:  "LPD",
+	554:  "RTSP",
+	631:  "IPP",
 	993:  "IMAPS",
 	995:  "POP3S",
+	1883: "MQTT",
 	1433: "MSSQL",
 	1521: "Oracle",
 	3306: "MySQL",
@@ -31,17 +35,20 @@ var portServiceMap = map[int]string{
 	5432: "PostgreSQL",
 	5900: "VNC",
 	6379: "Redis",
+	8009: "Chromecast",
 	8080: "HTTP-Proxy",
 	8443: "HTTPS-Alt",
 	8888: "HTTP-Alt",
+	9100: "Printer",
 	9200: "Elasticsearch",
 	27017: "MongoDB",
 }
 
-// 默认扫描端口（常见服务）
+// 默认扫描端口（常见服务，含打印机/摄像头/IoT）
 var defaultScanPorts = []int{
-	22, 80, 443, 445, 3389, 8080, 21, 23, 25, 53, 110, 143,
+	22, 80, 443, 445, 3389, 8080, 21, 23, 25, 53, 110, 135, 139,
 	993, 995, 3306, 5432, 5900, 6379, 8443, 1433, 1521, 27017,
+	554, 631, 1883, 9100,
 }
 
 // PortScanner TCP 端口扫描器
@@ -96,7 +103,7 @@ func (s *PortScanner) Scan(ip string) []int {
 
 // isPortOpen 检测单个端口是否开放（TCP connect）
 func (s *PortScanner) isPortOpen(ip string, port int) bool {
-	addr := fmt.Sprintf("%s:%d", ip, port)
+	addr := net.JoinHostPort(ip, fmt.Sprintf("%d", port))
 	conn, err := net.DialTimeout("tcp", addr, s.timeout)
 	if err != nil {
 		return false
@@ -105,7 +112,7 @@ func (s *PortScanner) isPortOpen(ip string, port int) bool {
 	return true
 }
 
-// ScanDevices 对设备列表批量扫描端口（并发控制），原地填充 OpenPorts
+// ScanDevices 对设备列表批量扫描端口（并发控制），原地填充 OpenPorts 与 PortServices
 func (s *PortScanner) ScanDevices(devices []*Device) {
 	var wg sync.WaitGroup
 	semaphore := make(chan struct{}, 10) // 同时扫描 10 台设备
@@ -118,6 +125,11 @@ func (s *PortScanner) ScanDevices(devices []*Device) {
 			defer wg.Done()
 			defer func() { <-semaphore }()
 			d.OpenPorts = s.Scan(d.IP)
+			services := make(map[int]string, len(d.OpenPorts))
+			for _, p := range d.OpenPorts {
+				services[p] = GetServiceName(p)
+			}
+			d.PortServices = services
 		}(device)
 	}
 

@@ -129,7 +129,7 @@
               effect="plain"
               style="margin: 2px 2px 0 0"
             >
-              {{ port }}
+              {{ port }}{{ device.portServices?.[port] ? ' ' + device.portServices[port] : '' }}
             </el-tag>
           </div>
           <span class="device-source">{{ device.source }}</span>

@@ -1,11 +1,15 @@
 package api
 
 import (
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -89,11 +93,29 @@ func (s *Server) Start() error {
 		respondJSON(w, http.StatusOK, APIResponse{Success: true, Message: "ok"})
 	})
 
-	// 静态文件（前端打包后），API 路由已注册在更具体的 pattern 上，不受影响
-	mux.Handle("/", http.FileServer(http.Dir(s.webDir)))
+	// 静态文件（前端打包后），API 路由已注册在更具体的 pattern 上，不受影响。
+	// history 路由的深链接（如 /devices）没有对应文件时回退到 index.html，
+	// 否则刷新/直达都会 404。
+	mux.Handle("/", s.spaHandler())
 
 	log.Printf("Server starting on %s (web dir: %s)", s.addr, s.webDir)
 	return http.ListenAndServe(s.addr, s.corsMiddleware(mux))
+}
+
+// spaHandler 静态文件服务，未命中的路径回退到 index.html（支持 history 路由刷新）
+func (s *Server) spaHandler() http.Handler {
+	fs := http.Dir(s.webDir)
+	fileServer := http.FileServer(fs)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := filepath.Join(s.webDir, filepath.Clean(r.URL.Path))
+		if info, err := os.Stat(path); err != nil || info.IsDir() {
+			// 文件不存在（或目录）且是页面请求 → 回退 index.html
+			if !strings.HasPrefix(r.URL.Path, "/api/") {
+				r.URL.Path = "/"
+			}
+		}
+		fileServer.ServeHTTP(w, r)
+	})
 }
 
 // corsMiddleware 跨域中间件
@@ -247,16 +269,17 @@ func (s *Server) applyNotes(devices []*scanner.Device) []map[string]interface{} 
 
 	for _, d := range devices {
 		item := map[string]interface{}{
-			"ip":        d.IP,
-			"mac":       d.MAC,
-			"hostname":  d.Hostname,
-			"vendor":    d.Vendor,
-			"status":    d.Status,
-			"source":    d.Source,
-			"openPorts": d.OpenPorts,
-			"noteName":  "",
-			"note":      "",
-			"noteColor": "",
+			"ip":           d.IP,
+			"mac":          d.MAC,
+			"hostname":     d.Hostname,
+			"vendor":       d.Vendor,
+			"status":       d.Status,
+			"source":       d.Source,
+			"openPorts":    d.OpenPorts,
+			"portServices": d.PortServices,
+			"noteName":     "",
+			"note":         "",
+			"noteColor":    "",
 		}
 		if n, ok := noteMap[d.IP]; ok {
 			item["noteName"] = n.Name
@@ -380,19 +403,24 @@ func (s *Server) handleExportCSV(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte{0xEF, 0xBB, 0xBF})
 	fmt.Fprintln(w, "IP,MAC,Hostname,Vendor,Status,Source,OpenPorts")
 
+	csvWriter := csv.NewWriter(w)
 	for _, d := range devices {
 		ports := ""
 		if len(d.OpenPorts) > 0 {
-			for i, p := range d.OpenPorts {
-				if i > 0 {
-					ports += ";"
-				}
-				ports += fmt.Sprintf("%d", p)
+			parts := make([]string, 0, len(d.OpenPorts))
+			for _, p := range d.OpenPorts {
+				parts = append(parts, fmt.Sprintf("%d(%s)", p, scanner.GetServiceName(p)))
 			}
+			ports = strings.Join(parts, ";")
 		}
-		fmt.Fprintf(w, "%s,%s,%s,%s,%s,%s,%s\n",
-			d.IP, d.MAC, d.Hostname, d.Vendor, d.Status, d.Source, ports)
+		// csv.Writer 自动处理逗号/引号/换行的转义
+		if err := csvWriter.Write([]string{
+			d.IP, d.MAC, d.Hostname, d.Vendor, d.Status, d.Source, ports,
+		}); err != nil {
+			continue
+		}
 	}
+	csvWriter.Flush()
 }
 
 // handleExportJSON 导出当前设备列表为 JSON
