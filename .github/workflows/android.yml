@@ -7,6 +7,10 @@
 
 name: Android CI
 
+# ⚠️ debug 包是开发调试用的：不含 JS bundle，装到手机上必须连 Metro
+#    开发服务器才能打开（否则红屏 "Unable to load script"）。
+#    手机上直接安装请用 release 包（自带 bundle，可独立运行）。
+
 on:
   workflow_dispatch:
     inputs:
